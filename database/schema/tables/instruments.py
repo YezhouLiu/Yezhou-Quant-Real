@@ -16,7 +16,7 @@ def create_instruments_table(conn, if_exists='skip'):
             instrument_id BIGSERIAL PRIMARY KEY,
             
             ticker TEXT NOT NULL,
-            exchange TEXT NOT NULL DEFAULT 'US',
+            exchange TEXT NOT NULL DEFAULT 'UNKNOWN',
             asset_type TEXT NOT NULL DEFAULT 'Stock',
             currency TEXT NOT NULL DEFAULT 'USD',
             
