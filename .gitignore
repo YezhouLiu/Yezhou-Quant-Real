@@ -1,0 +1,11 @@
+/secrets.env
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+
+# Logs
+*.log
+logs/

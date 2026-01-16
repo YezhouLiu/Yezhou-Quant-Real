@@ -1,0 +1,40 @@
+database:
+  type: postgresql
+  host: localhost
+  port: 5432
+  dbname: quant
+  user: YezhouLiu
+
+data:
+  source: tiingo
+  default_start_date: "2005-01-01"
+  default_end_date: "2100-01-01"
+
+runtime:
+  verbose: true
+  dry_run: false
+
+backtest:
+  capital: 100000
+  default_backtest_start_date: "2005-01-01"
+  default_backtest_end_date: "2100-01-01"
+
+exchange:
+  slippage: 0.005
+  transaction_cost: 0.001
+  exchange_cost: 0.0005
+  min_diff_buy_sell_ratio: 0.02
+  rebalance_total_value_reinvest_ratio: 0.98
+
+log:
+  log_dir: logs
+  log_level: INFO
+
+path:
+  csv_dir: csv
+
+price:
+  price_floor: 1.5
+  price_ceiling: 10000.0
+  jump_threshold: 0.95
+  jump_ratio_limit: 10.0
