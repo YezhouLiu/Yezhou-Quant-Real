@@ -29,6 +29,7 @@ def create_instruments_table(conn, if_exists='skip'):
             
             status TEXT NOT NULL DEFAULT 'active',
             is_tradable BOOLEAN DEFAULT FALSE,
+            is_factor_enabled BOOLEAN DEFAULT FALSE,
             
             created_at TIMESTAMPTZ DEFAULT now(),
             updated_at TIMESTAMPTZ DEFAULT now(),

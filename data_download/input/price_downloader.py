@@ -1,0 +1,330 @@
+"""
+价格数据下载器
+==============
+
+从 Tiingo 下载价格数据并写入数据库
+
+核心特性：
+1) 增量下载：从 system_state 读取上次下载位置，只下载缺失日期区间
+2) 高效连接：单个 HTTP Session + 单个 DB Connection
+3) 批量写入：减少 DB 交互次数
+4) 状态追踪：仅在失败率足够低时推进 system_state，避免数据缺口
+
+注意：
+- 本模块将“请求失败”(failed) 与 “合法但无数据”(skipped) 分开统计。
+- retry/退避在 HTTP 层处理（429/5xx），主流程不做无意义 sleep。
+
+Author: (rewrite by assistant)
+Date: 2026-01-17
+"""
+
+import sys
+from pathlib import Path
+
+from utils.time import latest_us_market_date
+
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+from datetime import date, timedelta
+from typing import Optional, Dict, Iterable, Tuple
+
+import requests
+from urllib3.util.retry import Retry
+
+from data_download.input.tiingo_downloader import (
+    fetch_tiingo_prices,
+    transform_tiingo_to_db_format,
+)
+from database.readwrite.rw_instruments import get_all_instruments
+from database.readwrite.rw_market_prices import batch_insert_prices
+from database.readwrite.rw_system_state import get_state, set_state
+from database.utils.db_utils import get_db_connection
+from utils.config_loader import get_config_value
+from utils.config_values import DEFAULT_START_DATE
+from utils.logger import get_logger
+
+log = get_logger("price_downloader")
+
+
+# -----------------------------------------------------------------------------
+# HTTP Session / Retry
+# -----------------------------------------------------------------------------
+def _build_session() -> requests.Session:
+    """
+    构建带 status-aware retry 的 Session。
+    说明：
+    - 重点覆盖 429（rate limit）与常见 5xx。
+    - backoff_factor=0.5 -> 0.5s, 1s, 2s...（由 urllib3 计算）
+    """
+    session = requests.Session()
+
+    # NOTE: allowed_methods 在较新 urllib3 中使用；如果你环境锁定版本可用即可。
+    retry = Retry(
+        total=3,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET"]),
+        backoff_factor=0.5,
+        raise_on_status=False,
+        respect_retry_after_header=True,  # 如果服务端返回 Retry-After，会更聪明
+    )
+
+    adapter = requests.adapters.HTTPAdapter(
+        max_retries=retry,
+        pool_connections=1,
+        pool_maxsize=1,
+    )
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+# -----------------------------------------------------------------------------
+# State logic
+# -----------------------------------------------------------------------------
+def _resolve_date_range(
+    conn, start_date: Optional[date], end_date: Optional[date]
+) -> Tuple[date, date]:
+    if end_date is None:
+        end_date = latest_us_market_date()
+
+    if start_date is not None:
+        return start_date, end_date
+
+    last_download = get_state(conn, "last_price_download")
+    if last_download:
+        # 这里不 try/except：上游 system_state 写坏就应当暴露
+        start = date.fromisoformat(last_download) + timedelta(days=1)
+        log.info(f"📅 继续增量下载: {start}")
+        return start, end_date
+
+    start = DEFAULT_START_DATE()
+    log.info(f"📅 首次下载: {start}")
+    return start, end_date
+
+
+def _should_advance_state(
+    *,
+    requested: int,
+    success: int,
+    failed: int,
+    max_failure_rate: float = 0.01,
+    min_success_to_advance: int = 1,
+) -> bool:
+    """
+    是否推进 last_price_download。
+
+    核心思想：
+    - 不让少量抖动阻止推进（否则永远重跑浪费）
+    - 也不让失败过多造成缺口（否则增量会“跳过坑”）
+
+    规则：
+    - 至少有 min_success_to_advance 成功
+    - failed/requested < max_failure_rate
+    - 允许一定数量的绝对失败：max(20, 0.5% * requested)
+      （这样小 universe 不苛刻，大 universe 不被绝对数卡死）
+    """
+    if success < min_success_to_advance:
+        return False
+    if requested <= 0:
+        return False
+
+    failure_rate = failed / requested
+    max_failed_abs = max(20, int(0.005 * requested))  # 0.5% or 20 whichever larger
+
+    return (failure_rate < max_failure_rate) and (failed <= max_failed_abs)
+
+
+# -----------------------------------------------------------------------------
+# Main downloader
+# -----------------------------------------------------------------------------
+def download_prices(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    asset_types: Optional[list] = None,
+    batch_size: int = 500,
+) -> Dict[str, int]:
+    log.info("=" * 70)
+    log.info("🚀 价格数据下载")
+    log.info("=" * 70)
+
+    api_token = get_config_value("tiingo.api_key")
+    if not api_token:
+        log.error("❌ 未配置 Tiingo API Token")
+        return {"success": 0, "failed": 0, "skipped": 0, "total": 0, "records": 0}
+
+    conn = get_db_connection()
+    if not conn:
+        log.error("❌ 无法创建数据库连接")
+        return {"success": 0, "failed": 0, "skipped": 0, "total": 0, "records": 0}
+
+    # 统计（requested 表示真正发起的网络请求次数）
+    total = 0
+    requested = 0
+    success = 0
+    failed = 0
+    skipped = 0
+    total_records = 0
+    pending_batch = []
+
+    try:
+        start_date, end_date = _resolve_date_range(conn, start_date, end_date)
+        
+        if start_date > end_date:
+            log.info(
+                f"🟢 价格数据已是最新，无需下载 "
+                f"(start_date={start_date} > end_date={end_date})"
+            )
+            conn.close()
+            return {
+                "success": 0,
+                "failed": 0,
+                "skipped": 0,
+                "total": 0,
+                "records": 0,
+                "requested": 0,
+            }
+
+        log.info(f"📅 日期范围: {start_date} → {end_date}")
+        log.info(f"📦 批量大小: {batch_size}条")
+
+        instruments_df = get_all_instruments(conn, asset_type=None)
+        if asset_types:
+            instruments_df = instruments_df[
+                instruments_df["asset_type"].isin(asset_types)
+            ]
+
+        total = len(instruments_df)
+        if total == 0:
+            log.warning("⚠️  没有找到需要下载的instruments")
+            return {"success": 0, "failed": 0, "skipped": 0, "total": 0, "records": 0}
+
+        log.info(f"📊 待下载: {total} 个instruments\n")
+
+        session = _build_session()
+        try:
+            for idx, row in instruments_df.iterrows():
+                ticker = row["ticker"]
+                instrument_id = row["instrument_id"]
+
+                if (idx + 1) % 50 == 0 or idx == 0:
+                    pct = (idx + 1) / total * 100
+                    log.info(
+                        f"[{idx+1}/{total}] {pct:.1f}% | ✅{success} ⏭️{skipped} ❌{failed} | 🌐{requested}req | 📊{total_records}条"
+                    )
+
+                requested += 1
+
+                try:
+                    tiingo_data = fetch_tiingo_prices(
+                        ticker, start_date, end_date, api_token, session
+                    )
+                except Exception as e:
+                    # fetch 内部可能抛异常（网络/解析等），这里捕获并计 failed，继续下一只
+                    failed += 1
+                    log.error(f"❌ {ticker}: fetch failed: {e}")
+                    continue
+
+                # 语义约定：None = 请求失败；[] = 合法但无数据
+                if tiingo_data is None:
+                    failed += 1
+                    log.error(f"❌ {ticker}: request failed (None)")
+                    continue
+
+                if len(tiingo_data) == 0:
+                    skipped += 1
+                    continue
+
+                try:
+                    db_records = transform_tiingo_to_db_format(
+                        tiingo_data, instrument_id
+                    )
+                except Exception as e:
+                    failed += 1
+                    log.error(f"❌ {ticker}: transform failed: {e}")
+                    continue
+
+                if not db_records:
+                    skipped += 1
+                    continue
+
+                pending_batch.extend(db_records)
+                success += 1
+
+                if len(pending_batch) >= batch_size:
+                    insert_count = len(pending_batch)
+                    try:
+                        batch_insert_prices(conn, pending_batch)
+                        conn.commit()
+                        total_records += insert_count
+                        pending_batch = []
+                    except Exception as e:
+                        conn.rollback()
+                        # DB 写入失败属于严重问题：计 failed，并继续（避免全盘崩）
+                        failed += 1
+                        log.error(f"❌ DB insert failed (batch {insert_count}): {e}")
+                        pending_batch = []
+
+            # flush remaining
+            if pending_batch:
+                insert_count = len(pending_batch)
+                try:
+                    batch_insert_prices(conn, pending_batch)
+                    conn.commit()
+                    total_records += insert_count
+                except Exception as e:
+                    conn.rollback()
+                    failed += 1
+                    log.error(f"❌ DB insert failed (final batch {insert_count}): {e}")
+
+        finally:
+            session.close()
+
+        # 推进 state（只在失败率足够低时）
+        if _should_advance_state(requested=requested, success=success, failed=failed):
+            last_date = _get_last_price_date(conn) # 获取 market_prices 目前最大 date
+            if last_date is not None:
+                set_state(conn, "last_price_download", last_date)
+                conn.commit()
+                log.info(f"\n✅ 更新下载位置(已落库最后一日): {last_date}")
+            else:
+                log.warning("\n⚠️ 未更新下载位置：market_prices 为空")
+        else:
+            failure_rate = (failed / requested) if requested else 0.0
+            log.warning(
+                f"\n⚠️ 未更新下载位置：失败率/失败数不达标 (失败率: {failure_rate*100:.2f}%, 失败数: {failed}, 请求数: {requested}), 避免数据缺口"
+            )
+
+    finally:
+        conn.close()
+
+    # 汇总
+    log.info("\n" + "=" * 70)
+    log.info("✅ 下载完成")
+    log.info("=" * 70)
+    log.info(f"总计 instruments: {total}")
+    if total > 0:
+        log.info(f"✅ 成功: {success} ({success/total*100:.1f}%)")
+        log.info(f"⏭️  无数据: {skipped} ({skipped/total*100:.1f}%)")
+        log.info(f"❌ 失败: {failed} ({failed/total*100:.1f}%)")
+    log.info(f"🌐 请求数: {requested}")
+    log.info(f"📊 插入: {total_records} 条记录")
+    log.info("=" * 70 + "\n")
+
+    return {
+        "success": success,
+        "failed": failed,
+        "skipped": skipped,
+        "total": total,
+        "records": total_records,
+        "requested": requested,
+    }
+
+def _get_last_price_date(conn) -> Optional[str]:
+    cursor = conn.cursor()
+    cursor.execute("SELECT MAX(date) FROM market_prices;")
+    row = cursor.fetchone()
+    if not row or row[0] is None:
+        return None
+    # row[0] 通常是 date 类型
+    return row[0].isoformat() if hasattr(row[0], "isoformat") else str(row[0])

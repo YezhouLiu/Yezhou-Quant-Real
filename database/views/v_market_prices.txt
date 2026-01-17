@@ -1,0 +1,20 @@
+SELECT
+    i.ticker,
+    mp.instrument_id,
+    mp.date,
+    mp.open_price,
+    mp.high_price,
+    mp.low_price,
+    mp.close_price,
+    mp.volume,
+    mp.adj_open,
+    mp.adj_high,
+    mp.adj_low,
+    mp.adj_close,
+    mp.adj_volume,
+    mp.dividends,
+    mp.stock_splits,
+    mp.data_source
+FROM public.market_prices mp
+JOIN public.instruments i
+  ON i.instrument_id = mp.instrument_id;
