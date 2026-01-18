@@ -1,43 +1,26 @@
 """
-价格数据下载器
-==============
-
 从 Tiingo 下载价格数据并写入数据库
-
 核心特性：
 1) 增量下载：从 system_state 读取上次下载位置，只下载缺失日期区间
 2) 高效连接：单个 HTTP Session + 单个 DB Connection
 3) 批量写入：减少 DB 交互次数
 4) 状态追踪：仅在失败率足够低时推进 system_state，避免数据缺口
-
-注意：
-- 本模块将“请求失败”(failed) 与 “合法但无数据”(skipped) 分开统计。
-- retry/退避在 HTTP 层处理（429/5xx），主流程不做无意义 sleep。
-
-Author: (rewrite by assistant)
-Date: 2026-01-17
 """
 
 import sys
 from pathlib import Path
-
-from utils.time import latest_us_market_date
+from utils.time import latest_us_market_date, to_date
 
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from datetime import date, timedelta
-from typing import Optional, Dict, Iterable, Tuple
-
+from typing import Optional, Dict, Tuple
 import requests
 from urllib3.util.retry import Retry
-
-from data_download.input.tiingo_downloader import (
-    fetch_tiingo_prices,
-    transform_tiingo_to_db_format,
-)
+from typing import Optional, Dict, List, Any, Tuple
 from database.readwrite.rw_instruments import get_all_instruments
-from database.readwrite.rw_market_prices import batch_insert_prices
+from database.readwrite.rw_market_prices import batch_insert_prices, get_price_max_date
 from database.readwrite.rw_system_state import get_state, set_state
 from database.utils.db_utils import get_db_connection
 from utils.config_loader import get_config_value
@@ -88,19 +71,22 @@ def _resolve_date_range(
     if end_date is None:
         end_date = latest_us_market_date()
 
+    # 统一类型（用户可能传 str / Timestamp）
+    end_date = to_date(end_date)
+
     if start_date is not None:
-        return start_date, end_date
+        return to_date(start_date), end_date
 
     last_download = get_state(conn, "last_price_download")
     if last_download:
-        # 这里不 try/except：上游 system_state 写坏就应当暴露
-        start = date.fromisoformat(last_download) + timedelta(days=1)
+        start = to_date(last_download) + timedelta(days=1)
         log.info(f"📅 继续增量下载: {start}")
         return start, end_date
 
-    start = DEFAULT_START_DATE()
+    start = to_date(DEFAULT_START_DATE())
     log.info(f"📅 首次下载: {start}")
     return start, end_date
+
 
 
 def _should_advance_state(
@@ -169,7 +155,7 @@ def download_prices(
 
     try:
         start_date, end_date = _resolve_date_range(conn, start_date, end_date)
-        
+
         if start_date > end_date:
             log.info(
                 f"🟢 价格数据已是最新，无需下载 "
@@ -236,7 +222,7 @@ def download_prices(
                     continue
 
                 try:
-                    db_records = transform_tiingo_to_db_format(
+                    db_records = transform_tiingo_price_data_to_db_format(
                         tiingo_data, instrument_id
                     )
                 except Exception as e:
@@ -282,9 +268,10 @@ def download_prices(
 
         # 推进 state（只在失败率足够低时）
         if _should_advance_state(requested=requested, success=success, failed=failed):
-            last_date = _get_last_price_date(conn) # 获取 market_prices 目前最大 date
+            last_date = get_price_max_date(conn)  # 获取 market_prices 目前最大 date
             if last_date is not None:
-                set_state(conn, "last_price_download", last_date)
+                last_date = to_date(last_date)
+                set_state(conn, "last_price_download", last_date.isoformat())
                 conn.commit()
                 log.info(f"\n✅ 更新下载位置(已落库最后一日): {last_date}")
             else:
@@ -320,11 +307,87 @@ def download_prices(
         "requested": requested,
     }
 
-def _get_last_price_date(conn) -> Optional[str]:
-    cursor = conn.cursor()
-    cursor.execute("SELECT MAX(date) FROM market_prices;")
-    row = cursor.fetchone()
-    if not row or row[0] is None:
+
+def fetch_tiingo_prices(
+    ticker: str,
+    start_date: date,
+    end_date: date,
+    api_token: str,
+    session: requests.Session,
+) -> Optional[List[Dict[str, Any]]]:
+    url = f"https://api.tiingo.com/tiingo/daily/{ticker}/prices"
+    headers = {"Authorization": f"Token {api_token}"}
+    params = {
+        "startDate": start_date.strftime("%Y-%m-%d"),
+        "endDate": end_date.strftime("%Y-%m-%d"),
+        "format": "json",
+    }
+
+    try:
+        resp = session.get(url, headers=headers, params=params, timeout=15)
+    except Exception as e:
+        log.error(f"❌ {ticker}: request exception: {e}")
         return None
-    # row[0] 通常是 date 类型
-    return row[0].isoformat() if hasattr(row[0], "isoformat") else str(row[0])
+
+    if resp.status_code != 200:
+        # 关键：把错误信息露出来，否则你永远不知道是 401/403/404/429/5xx 还是参数问题
+        snippet = (resp.text or "")[:200].replace("\n", " ")
+        log.warning(f"⚠️ {ticker}: HTTP {resp.status_code} | {snippet}")
+        return None
+
+    # 200：解析 JSON
+    try:
+        data = resp.json()
+    except Exception as e:
+        snippet = (resp.text or "")[:200].replace("\n", " ")
+        log.error(f"❌ {ticker}: JSON decode failed: {e} | {snippet}")
+        return None
+
+    # Tiingo 这里应当返回 list
+    if not isinstance(data, list):
+        # 不能当 []，否则把错误伪装成“无数据”
+        snippet = str(data)[:200].replace("\n", " ")
+        log.error(f"❌ {ticker}: unexpected JSON type {type(data)} | {snippet}")
+        return None
+
+    # list：可能为空
+    return data
+
+
+def transform_tiingo_price_data_to_db_format(
+    tiingo_data: List[Dict[str, Any]],
+    instrument_id: int,
+) -> List[Dict[str, Any]]:
+    """
+    转换 Tiingo 响应为数据库格式。
+
+    注意：这里默认不吞异常（早暴露问题）。
+    如果你确实要容错，可以改为严格计数并在最后汇报/raise。
+    """
+    db_records: List[Dict[str, Any]] = []
+
+    for record in tiingo_data:
+        # 这里故意用直接索引：字段缺失就应当暴露
+        date_str = record["date"][:10]
+
+        db_records.append(
+            {
+                "instrument_id": instrument_id,
+                "date": date_str,
+                "open_price": record.get("open"),
+                "high_price": record.get("high"),
+                "low_price": record.get("low"),
+                "close_price": record.get("close"),
+                "volume": record.get("volume"),
+                "adj_open": record.get("adjOpen"),
+                "adj_high": record.get("adjHigh"),
+                "adj_low": record.get("adjLow"),
+                "adj_close": record.get("adjClose"),
+                "adj_volume": record.get("adjVolume"),
+                "dividends": record.get("divCash", 0),
+                "stock_splits": record.get("splitFactor", 1),
+                "data_source": "tiingo",
+            }
+        )
+
+    return db_records

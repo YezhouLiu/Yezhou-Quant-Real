@@ -1,3 +1,4 @@
+from database.schema.tables.corporate_actions import create_corporate_actions_indexes, create_corporate_actions_table
 from database.utils.db_utils import get_db_connection
 from utils.logger import get_logger
 
@@ -66,18 +67,15 @@ def create_all_tables(conn, if_exists='skip'):
     create_instrument_identifiers_table(conn, if_exists)
     create_market_prices_table(conn, if_exists)
     create_fundamental_data_table(conn, if_exists)
-    
     create_universe_definitions_table(conn, if_exists)
     create_universe_snapshots_table(conn, if_exists)
     create_universe_members_table(conn, if_exists)
-    
     create_trading_calendar_table(conn, if_exists)
-    
     create_fills_table(conn, if_exists)
     create_positions_table(conn, if_exists)
-    
     create_system_state_table(conn, if_exists)
     create_data_update_logs_table(conn, if_exists)
+    create_corporate_actions_table(conn, if_exists)
     
     print("\n✅ 所有表创建完毕")
 
@@ -97,6 +95,7 @@ def create_indexes(conn):
     create_positions_indexes(conn)
     create_system_state_indexes(conn)
     create_data_update_logs_indexes(conn)
+    create_corporate_actions_indexes(conn)
     
     print("✅ 所有索引创建完毕")
 
@@ -113,7 +112,7 @@ if __name__ == "__main__":
     try:
         conn = get_db_connection()
         
-        create_all_tables(conn, if_exists='drop')
+        create_all_tables(conn, if_exists='skip')
         create_indexes(conn)
         
         conn.commit()

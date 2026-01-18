@@ -16,7 +16,7 @@ os.chdir(project_root)
 from datetime import date
 import requests
 
-from data_download.input.tiingo_downloader import fetch_tiingo_prices, transform_tiingo_to_db_format
+from data_download.input.price_downloader import fetch_tiingo_prices, transform_tiingo_price_data_to_db_format
 from utils.config_loader import get_config_value
 
 
@@ -64,7 +64,7 @@ def test_fetch_and_transform():
         
         # 测试transform
         print("🔄 转换为数据库格式...")
-        db_records = transform_tiingo_to_db_format(tiingo_data, test_instrument_id)
+        db_records = transform_tiingo_price_data_to_db_format(tiingo_data, test_instrument_id)
         
         if not db_records:
             print("❌ 转换失败")

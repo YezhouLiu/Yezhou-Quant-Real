@@ -138,3 +138,23 @@ def delete_prices(conn, instrument_id: int, start_date: str = None, end_date: st
     cursor = conn.cursor()
     cursor.execute(query, params)
     log.warning(f"[⚠] 删除价格数据: instrument_id={instrument_id}")
+
+
+def get_price_max_date(conn) -> Optional[str]:
+    """获取 market_prices 最大日期（用于推进状态）"""
+    cursor = conn.cursor()
+    cursor.execute("SELECT MAX(date) FROM market_prices;")
+    row = cursor.fetchone()
+    if not row or row[0] is None:
+        return None
+    d = row[0]
+    return d.isoformat() if hasattr(d, "isoformat") else str(d)
+
+
+def get_price_min_date(conn) -> Optional[date]:
+    cursor = conn.cursor()
+    cursor.execute("SELECT MIN(date) FROM market_prices;")
+    row = cursor.fetchone()
+    if not row or row[0] is None:
+        return None
+    return row[0] if isinstance(row[0], date) else date.fromisoformat(str(row[0]))

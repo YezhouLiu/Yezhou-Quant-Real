@@ -1,20 +1,12 @@
 """
-Tiingo 美股股票列表下载器
-===========================
-
 从 Tiingo API 下载官方支持的股票列表
 Tiingo 每日更新 supported_tickers.zip 文件，包含所有可交易的股票代码
-
 数据源：https://apimedia.tiingo.com/docs/tiingo/daily/supported_tickers.zip
-
 优势：
 - 官方数据，准确可靠
 - 每日更新
 - 包含 Tiingo 实际支持的所有股票
 - 无需过滤，避免误判
-
-Author: YezhouLiu
-Date: 2026-01-16
 """
 
 import sys
