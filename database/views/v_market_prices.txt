@@ -1,6 +1,7 @@
 SELECT
     i.ticker,
     mp.instrument_id,
+    i.asset_type,
     mp.date,
     mp.open_price,
     mp.high_price,

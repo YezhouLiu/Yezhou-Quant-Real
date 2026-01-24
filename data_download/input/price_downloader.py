@@ -9,7 +9,8 @@
 
 import sys
 from pathlib import Path
-from utils.time import latest_us_market_date, to_date
+from database.readwrite.rw_trading_calendar import get_prev_trading_day
+from utils.time import DATE_TODAY, to_date
 
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
@@ -68,25 +69,33 @@ def _build_session() -> requests.Session:
 def _resolve_date_range(
     conn, start_date: Optional[date], end_date: Optional[date]
 ) -> Tuple[date, date]:
+    # ---------- end_date ----------
     if end_date is None:
-        end_date = latest_us_market_date()
+        today: date = DATE_TODAY()  # 明确标注，Pylance 不会 Unknown
+        prev_td: Optional[str] = get_prev_trading_day(
+            conn, today.isoformat(), market="US"
+        )
+        if prev_td is None:
+            raise RuntimeError(
+                "trading_calendar missing or no previous trading day found"
+            )
+        end_date = to_date(prev_td)
+    else:
+        end_date = to_date(end_date)
 
-    # 统一类型（用户可能传 str / Timestamp）
-    end_date = to_date(end_date)
-
+    # ---------- start_date ----------
     if start_date is not None:
         return to_date(start_date), end_date
 
-    last_download = get_state(conn, "last_price_download")
-    if last_download:
-        start = to_date(last_download) + timedelta(days=1)
-        log.info(f"📅 继续增量下载: {start}")
+    last_db_date = get_price_max_date(conn)  # 可能是 date / str / Timestamp，看你实现
+    if last_db_date:
+        start = to_date(last_db_date) + timedelta(days=1)
+        log.info(f"📅 继续增量下载（基于 market_prices.max(date)）: {start}")
         return start, end_date
 
     start = to_date(DEFAULT_START_DATE())
     log.info(f"📅 首次下载: {start}")
     return start, end_date
-
 
 
 def _should_advance_state(

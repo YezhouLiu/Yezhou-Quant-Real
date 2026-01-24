@@ -28,3 +28,6 @@ matplotlib==3.10.8
 
 # 工具
 tqdm==4.67.1
+
+# 时间处理
+pandas-market-calendars==1.9.0

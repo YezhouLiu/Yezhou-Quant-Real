@@ -17,20 +17,20 @@ def create_fundamental_data_table(conn, if_exists='skip'):
             report_date DATE NOT NULL,
             metric_name TEXT NOT NULL,
             
-            metric_value NUMERIC(20,6),
+            metric_value NUMERIC(38,10),
             period_type TEXT NOT NULL,
             period_start DATE,
             period_end DATE,
             
             currency TEXT DEFAULT 'USD',
-            data_source TEXT DEFAULT 'tiingo',
+            data_source TEXT DEFAULT 'sec_edgar',
             ingested_at TIMESTAMPTZ DEFAULT now(),
             
             PRIMARY KEY (instrument_id, report_date, metric_name, period_type),
             CHECK (period_type IN ('TTM','Quarterly','Annual'))
         );
         
-        COMMENT ON TABLE fundamental_data IS 'V2.01: 基本面数据（Tiingo Fundamentals - 预留但暂不使用）';
+        COMMENT ON TABLE fundamental_data IS 'V2.01: 基本面数据（SEC EDGAR - 预留但暂不使用）';
         COMMENT ON COLUMN fundamental_data.metric_name IS 'EPS, Revenue, NetIncome, ROE, PE, PB...';
     """
     
