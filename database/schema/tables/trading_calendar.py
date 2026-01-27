@@ -21,7 +21,7 @@ def create_trading_calendar_table(conn, if_exists='skip'):
             PRIMARY KEY (market, date)
         );
         
-        COMMENT ON TABLE trading_calendar IS 'V2.01: 交易日历（历史单分支事实）';
+        COMMENT ON TABLE trading_calendar IS '交易日历（历史单分支事实）';
     """
     
     cursor = conn.cursor()

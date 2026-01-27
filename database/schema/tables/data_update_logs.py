@@ -34,7 +34,7 @@ def create_data_update_logs_table(conn, if_exists='skip'):
             CHECK (dataset IN ('market_prices','fundamental_data','universe','instruments'))
         );
         
-        COMMENT ON TABLE data_update_logs IS 'V2.01: 数据更新日志（监控 Tiingo API 调用）';
+        COMMENT ON TABLE data_update_logs IS '数据更新日志（监控 Tiingo API 调用）';
     """
     
     cursor = conn.cursor()

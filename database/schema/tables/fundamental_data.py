@@ -30,7 +30,7 @@ def create_fundamental_data_table(conn, if_exists='skip'):
             CHECK (period_type IN ('TTM','Quarterly','Annual'))
         );
         
-        COMMENT ON TABLE fundamental_data IS 'V2.01: 基本面数据（SEC EDGAR - 预留但暂不使用）';
+        COMMENT ON TABLE fundamental_data IS '基本面数据（SEC EDGAR - 预留但暂不使用）';
         COMMENT ON COLUMN fundamental_data.metric_name IS 'EPS, Revenue, NetIncome, ROE, PE, PB...';
     """
     

@@ -7,6 +7,8 @@ import pytest
 from unittest.mock import MagicMock
 
 from database.readwrite.rw_instruments import (
+    get_tradable_instrument_ids,
+    get_tradable_tickers,
     insert_instrument,
     get_instrument_id,
     get_instrument_by_id,
@@ -49,7 +51,9 @@ def _as_row(description_cols, values):
             cols.append(item)
 
     if len(cols) != len(values):
-        raise AssertionError(f"列数不匹配：description={len(cols)} values={len(values)}")
+        raise AssertionError(
+            f"列数不匹配：description={len(cols)} values={len(values)}"
+        )
 
     return dict(zip(cols, values))
 
@@ -63,8 +67,11 @@ class TestInsertInstrument:
         cursor.fetchone.return_value = (123,)
 
         result = insert_instrument(
-            conn, ticker="AAPL", exchange="US",
-            company_name="Apple Inc.", sector="Technology"
+            conn,
+            ticker="AAPL",
+            exchange="US",
+            company_name="Apple Inc.",
+            sector="Technology",
         )
 
         assert result == 123
@@ -79,8 +86,7 @@ class TestInsertInstrument:
         cursor.fetchone.return_value = (123,)
 
         result = insert_instrument(
-            conn, ticker="AAPL", exchange="US",
-            company_name="Apple Inc. Updated"
+            conn, ticker="AAPL", exchange="US", company_name="Apple Inc. Updated"
         )
 
         assert result == 123
@@ -101,8 +107,7 @@ class TestInsertInstrument:
         cursor.fetchone.return_value = (789,)
 
         result = insert_instrument(
-            conn, ticker="SNOW", exchange="US",
-            ipo_date="2020-09-16"
+            conn, ticker="SNOW", exchange="US", ipo_date="2020-09-16"
         )
 
         assert result == 789
@@ -115,8 +120,11 @@ class TestInsertInstrument:
         cursor.fetchone.return_value = (999,)
 
         result = insert_instrument(
-            conn, ticker="DEAD", exchange="US",
-            status="delisted", delist_date="2023-12-31"
+            conn,
+            ticker="DEAD",
+            exchange="US",
+            status="delisted",
+            delist_date="2023-12-31",
         )
 
         assert result == 999
@@ -163,7 +171,7 @@ class TestGetInstrumentById:
         """根据 ID 获取完整资产信息（按列名断言，避免 schema 加列导致列位错乱）"""
         conn, cursor = mock_conn
 
-        # 这里假设实现返回这些列名（你就算加新列，也只要 description 和 value 对齐即可）
+        # 实现返回这些列名（若加新列，只要 description 和 value 对齐即可）
         cursor.description = [
             ("instrument_id",),
             ("ticker",),
@@ -178,17 +186,28 @@ class TestGetInstrumentById:
             ("delist_date",),
             ("status",),
             ("is_tradable",),
-            ("is_factor_enabled",),  # 新增列（如果你的实现不返回它，可以删掉这一列和下面的值/断言）
+            ("is_factor_enabled",),
             ("created_at",),
             ("updated_at",),
         ]
 
         cursor.fetchone.return_value = (
-            123, "AAPL", "US", "Stock", "USD", "Apple Inc.",
-            "Tech company", "Technology", "Consumer Electronics",
-            "1980-12-12", None, "active", True,
+            123,
+            "AAPL",
+            "US",
+            "Stock",
+            "USD",
+            "Apple Inc.",
+            "Tech company",
+            "Technology",
+            "Consumer Electronics",
+            "1980-12-12",
+            None,
+            "active",
+            True,
             False,  # is_factor_enabled 默认 False
-            "2024-01-01", "2024-01-01"
+            "2024-01-01",
+            "2024-01-01",
         )
 
         result = get_instrument_by_id(conn, 123)
@@ -348,3 +367,46 @@ class TestBatchInsertInstruments:
         batch_insert_instruments(conn, [])
 
         assert cursor.execute.call_count == 0
+
+
+class TestGetTradableInstruments:
+    def test_get_tradable_instrument_ids(self, mock_conn):
+        conn, cursor = mock_conn
+        cursor.fetchall.return_value = [(1,), (2,), (10,)]
+
+        ids = get_tradable_instrument_ids(conn)
+
+        assert ids == [1, 2, 10]
+        assert cursor.execute.called
+
+        sql = cursor.execute.call_args[0][0]
+        assert len(cursor.execute.call_args[0]) == 1
+
+        assert "FROM instruments" in sql
+        assert "WHERE is_tradable = TRUE" in sql
+        assert "exchange" not in sql
+
+    def test_get_tradable_tickers(self, mock_conn):
+        conn, cursor = mock_conn
+        cursor.fetchall.return_value = [("AAPL",), ("MSFT",), ("NVDA",)]
+
+        tickers = get_tradable_tickers(conn)
+
+        assert tickers == ["AAPL", "MSFT", "NVDA"]
+        assert cursor.execute.called
+
+        sql = cursor.execute.call_args[0][0]
+        assert len(cursor.execute.call_args[0]) == 1
+
+        assert "SELECT ticker" in sql
+        assert "WHERE is_tradable = TRUE" in sql
+        assert "exchange" not in sql
+
+    def test_get_tradable_tickers_empty(self, mock_conn):
+        conn, cursor = mock_conn
+        cursor.fetchall.return_value = []
+
+        tickers = get_tradable_tickers(conn)
+
+        assert tickers == []
+        assert cursor.execute.called

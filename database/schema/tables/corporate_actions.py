@@ -34,7 +34,7 @@ def create_corporate_actions_table(conn, if_exists='skip'):
             ))
         );
 
-        COMMENT ON TABLE corporate_actions IS 'V2.01: 公司行为数据（Tiingo Corporate Actions）';
+        COMMENT ON TABLE corporate_actions IS '公司行为数据（Tiingo Corporate Actions）';
         COMMENT ON COLUMN corporate_actions.action_type IS '分红/拆股/合股等公司行为类型';
         COMMENT ON COLUMN corporate_actions.action_value IS '分红金额（每股）或拆股比例';
         COMMENT ON COLUMN corporate_actions.raw_payload IS 'Tiingo 原始返回数据，用于追溯';

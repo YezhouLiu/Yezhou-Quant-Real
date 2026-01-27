@@ -23,7 +23,7 @@ def create_universe_definitions_table(conn, if_exists='skip'):
             CHECK (source_type IN ('wikipedia','manual','api','file_import'))
         );
         
-        COMMENT ON TABLE universe_definitions IS 'V2.01: Universe 定义（SP500/NASDAQ100/自定义）';
+        COMMENT ON TABLE universe_definitions IS 'Universe 定义（SP500/NASDAQ100/自定义）';
     """
     
     cursor = conn.cursor()

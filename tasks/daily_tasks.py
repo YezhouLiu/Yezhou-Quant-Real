@@ -14,3 +14,4 @@ def daily_update():
     # 每日更新可交易标的
     update_tradable_universe()
     
+    

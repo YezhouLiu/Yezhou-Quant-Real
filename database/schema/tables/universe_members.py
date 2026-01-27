@@ -21,7 +21,7 @@ def create_universe_members_table(conn, if_exists='skip'):
             PRIMARY KEY (snapshot_id, instrument_id)
         );
         
-        COMMENT ON TABLE universe_members IS 'V2.01: Universe 成员列表';
+        COMMENT ON TABLE universe_members IS 'Universe 成员列表';
         COMMENT ON COLUMN universe_members.weight_hint IS '可选：指数权重（如果来源提供）';
     """
     

@@ -37,7 +37,7 @@ def create_market_prices_table(conn, if_exists='skip'):
             PRIMARY KEY (instrument_id, date)
         );
         
-        COMMENT ON TABLE market_prices IS 'V2.01: Tiingo EOD 价格（完整 OHLCV + 复权）';
+        COMMENT ON TABLE market_prices IS 'Tiingo EOD 价格（完整 OHLCV + 复权）';
         COMMENT ON COLUMN market_prices.dividends IS '当日分红（美元）';
         COMMENT ON COLUMN market_prices.stock_splits IS '拆股因子（2.0=1拆2，0.5=2合1）';
     """

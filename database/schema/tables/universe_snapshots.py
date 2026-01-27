@@ -26,7 +26,7 @@ def create_universe_snapshots_table(conn, if_exists='skip'):
             UNIQUE(universe_id, as_of_date)
         );
         
-        COMMENT ON TABLE universe_snapshots IS 'V2.01: Universe 版本快照（防爬虫失效）';
+        COMMENT ON TABLE universe_snapshots IS 'Universe 版本快照（防爬虫失效）';
         COMMENT ON COLUMN universe_snapshots.file_path IS '本地 CSV 备份路径';
         COMMENT ON COLUMN universe_snapshots.raw_content IS '原始 HTML/CSV 内容（可重解析）';
     """

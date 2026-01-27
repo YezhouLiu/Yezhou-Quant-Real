@@ -18,7 +18,7 @@ def create_system_state_table(conn, if_exists='skip'):
             updated_at TIMESTAMPTZ DEFAULT now()
         );
         
-        COMMENT ON TABLE system_state IS 'V2.01: 系统状态/配置（cash_instrument_id, last_price_update...）';
+        COMMENT ON TABLE system_state IS '系统状态/配置（cash_instrument_id, last_price_update...）';
     """
     
     cursor = conn.cursor()

@@ -24,7 +24,7 @@ def create_instrument_identifiers_table(conn, if_exists='skip'):
             CHECK (id_type IN ('tiingo','yfinance','cusip','isin','sedol','figi'))
         );
         
-        COMMENT ON TABLE instrument_identifiers IS 'V2.01: 跨数据源映射（Tiingo/YF/CUSIP）';
+        COMMENT ON TABLE instrument_identifiers IS '跨数据源映射（Tiingo/YF/CUSIP）';
     """
     
     cursor = conn.cursor()

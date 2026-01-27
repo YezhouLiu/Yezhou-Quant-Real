@@ -79,10 +79,10 @@ WHERE
 
     AND (l.latest_adj_close / NULLIF(p.peak_1y, 0) - 1) BETWEEN par.dd_min AND par.dd_max
 
-    -- ✅ 默认排除Biotech（你要保留就把这行注释掉）
+    -- ✅ 默认排除Biotech（要保留就把这行注释掉）
     AND NOT (i.sector = 'Healthcare' AND i.industry ILIKE '%biotech%')
 
-    -- ✅ 默认排除明显“风险资产代理/事件股”（你要保留也可以注释）
+    -- ✅ 默认排除明显“风险资产代理/事件股”（要保留就把这行注释掉）
     AND i.ticker NOT IN ('MSTR','MARA','CLSK','DJT')
 
 ORDER BY

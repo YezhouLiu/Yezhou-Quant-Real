@@ -62,7 +62,7 @@ def latest_us_market_date() -> date:
     经验规则（务实版）：
     - 如果纽约时间还没到当日收盘后（比如 18:00 之前），就认为当天 EOD 可能还不稳，
       end_date 取前一日，避免请求到“今天但其实还没数据”的空结果。
-    - 18:00 这个阈值你可按 Tiingo 实际出数时间再微调。
+    - 18:00 这个阈值可按 Tiingo 实际出数时间再微调。
     """
     ny_now = datetime.now(ZoneInfo("America/New_York"))
     ny_today = ny_now.date()

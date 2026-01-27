@@ -87,7 +87,7 @@ def _resolve_date_range(
     if start_date is not None:
         return to_date(start_date), end_date
 
-    last_db_date = get_price_max_date(conn)  # 可能是 date / str / Timestamp，看你实现
+    last_db_date = get_price_max_date(conn) # market_prices 最大 date
     if last_db_date:
         start = to_date(last_db_date) + timedelta(days=1)
         log.info(f"📅 继续增量下载（基于 market_prices.max(date)）: {start}")
@@ -369,9 +369,7 @@ def transform_tiingo_price_data_to_db_format(
 ) -> List[Dict[str, Any]]:
     """
     转换 Tiingo 响应为数据库格式。
-
     注意：这里默认不吞异常（早暴露问题）。
-    如果你确实要容错，可以改为严格计数并在最后汇报/raise。
     """
     db_records: List[Dict[str, Any]] = []
 

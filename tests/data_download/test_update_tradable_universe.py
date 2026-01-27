@@ -110,7 +110,7 @@ def test_update_tradable_universe_dry_run(mock_get_conn, mock_conn_cursor):
 @patch("tools.update_tradable_universe.get_db_connection")
 def test_fail_when_market_prices_empty(mock_get_conn, mock_conn_cursor):
     """
-    market_prices 为空时应直接失败（这是你要求的：早点炸）
+    market_prices 为空时应直接失败
     """
     conn, cursor = mock_conn_cursor
     mock_get_conn.return_value = conn

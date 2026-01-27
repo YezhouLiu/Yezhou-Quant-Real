@@ -39,7 +39,7 @@ def create_instruments_table(conn, if_exists='skip'):
             CHECK (asset_type IN ('Stock','ETF','Cash'))
         );
         
-        COMMENT ON TABLE instruments IS 'V2.01: 资产主表，统一管理 Stock/ETF/Cash';
+        COMMENT ON TABLE instruments IS '资产主表，统一管理 Stock/ETF/Cash';
         COMMENT ON COLUMN instruments.instrument_id IS '稳定主键，解决 ticker 改名问题';
         COMMENT ON COLUMN instruments.is_tradable IS '是否在交易池中（从 universe 同步）';
     """
