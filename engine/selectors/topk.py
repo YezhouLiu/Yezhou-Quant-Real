@@ -41,7 +41,6 @@ class TopKSelector:
 
         df = signals
 
-        # 应用户偏好：缺列直接炸，不做容错
         for col, op, thr in self.filters:
             if col not in df.columns:
                 raise KeyError(f"signals missing filter column: {col}")

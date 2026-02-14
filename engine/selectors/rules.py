@@ -38,7 +38,6 @@ class RuleSelector:
 
         df = signals
 
-        # rules 过滤：缺列直接炸
         for r in self.rules:
             if r.col not in df.columns:
                 raise KeyError(f"signals missing rule column: {r.col}")

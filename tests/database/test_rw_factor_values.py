@@ -19,7 +19,6 @@ def mock_conn():
     cursor = MagicMock()
     conn.cursor.return_value = cursor
 
-    # 支持 with conn.cursor() as cur（如果未来用到）
     cursor.__enter__.return_value = cursor
     cursor.__exit__.return_value = False
 

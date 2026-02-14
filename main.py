@@ -4,7 +4,8 @@ from tasks.daily_tasks import daily_update
 from tasks.seasonal_tasks import seasonal_update
 
 if __name__ == "__main__":
-    compute_all_factors.compute_all_factors()
-    #daily_update()
-    #seasonal_update()
-    #annual_update()
+    # daily_update()
+    # compute_all_factors.compute_all_factors()
+    # seasonal_update()
+    # annual_update()
+    pass

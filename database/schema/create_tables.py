@@ -24,18 +24,6 @@ from database.schema.tables.fundamental_data import (
     create_fundamental_data_table,
     create_fundamental_data_indexes,
 )
-from database.schema.tables.universe_definitions import (
-    create_universe_definitions_table,
-    create_universe_definitions_indexes,
-)
-from database.schema.tables.universe_snapshots import (
-    create_universe_snapshots_table,
-    create_universe_snapshots_indexes,
-)
-from database.schema.tables.universe_members import (
-    create_universe_members_table,
-    create_universe_members_indexes,
-)
 from database.schema.tables.trading_calendar import (
     create_trading_calendar_table,
     create_trading_calendar_indexes,
@@ -72,9 +60,6 @@ def create_all_tables(conn, if_exists="skip"):
     create_instrument_identifiers_table(conn, if_exists)
     create_market_prices_table(conn, if_exists)
     create_fundamental_data_table(conn, if_exists)
-    create_universe_definitions_table(conn, if_exists)
-    create_universe_snapshots_table(conn, if_exists)
-    create_universe_members_table(conn, if_exists)
     create_trading_calendar_table(conn, if_exists)
     create_fills_table(conn, if_exists)
     create_positions_table(conn, if_exists)
@@ -96,9 +81,6 @@ def create_indexes(conn):
     create_universe_definitions_indexes(conn)
     create_universe_snapshots_indexes(conn)
     create_universe_members_indexes(conn)
-    create_trading_calendar_indexes(conn)
-    create_fills_indexes(conn)
-    create_positions_indexes(conn)
     create_system_state_indexes(conn)
     create_data_update_logs_indexes(conn)
     create_corporate_actions_indexes(conn)

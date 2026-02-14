@@ -43,7 +43,6 @@ def _build_session() -> requests.Session:
     """
     session = requests.Session()
 
-    # NOTE: allowed_methods 在较新 urllib3 中使用；如果你环境锁定版本可用即可。
     retry = Retry(
         total=3,
         status_forcelist=(429, 500, 502, 503, 504),
@@ -339,7 +338,6 @@ def fetch_tiingo_prices(
         return None
 
     if resp.status_code != 200:
-        # 关键：把错误信息露出来，否则你永远不知道是 401/403/404/429/5xx 还是参数问题
         snippet = (resp.text or "")[:200].replace("\n", " ")
         log.warning(f"⚠️ {ticker}: HTTP {resp.status_code} | {snippet}")
         return None
@@ -374,7 +372,6 @@ def transform_tiingo_price_data_to_db_format(
     db_records: List[Dict[str, Any]] = []
 
     for record in tiingo_data:
-        # 这里故意用直接索引：字段缺失就应当暴露
         date_str = record["date"][:10]
 
         db_records.append(

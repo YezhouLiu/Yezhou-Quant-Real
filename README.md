@@ -25,12 +25,11 @@ Yezhou-Quant-Real/
 ├── database/                    # 数据库层 ⭐ 核心
 │   ├── schema/                  # 表结构定义
 │   │   ├── create_tables.py     # 一键建表脚本
-│   │   └── tables/              # 各表DDL（14张表）
+│   │   └── tables/              # 各表DDL（11张表）
 │   ├── readwrite/               # RW方法（数据存取接口）
 │   │   ├── rw_instruments.py    # 资产主表
 │   │   ├── rw_market_prices.py  # 价格数据
 │   │   ├── rw_factor_values.py  # 因子值
-│   │   ├── rw_universe_*.py     # 标的池管理
 │   │   └── ...                  # 其他表的RW方法
 │   └── utils/
 │       └── db_utils.py          # 数据库连接工具
@@ -79,7 +78,427 @@ Yezhou-Quant-Real/
 
 ---
 
-## 🔄 业务逻辑
+## �️ 数据库架构
+
+### 数据表总览（11张表）
+
+系统采用 PostgreSQL 作为核心数据库，所有表通过 `instrument_id` 作为统一外键关联。
+
+#### 核心数据表
+1. **instruments** - 资产主表
+2. **instrument_identifiers** - 跨数据源映射表
+3. **market_prices** - 市场价格数据（OHLCV + 复权）
+4. **corporate_actions** - 企业行为（分红、拆股）
+5. **fundamental_data** - 基本面数据（预留）
+
+#### 因子与回测表
+6. **factor_values** - 因子值表
+7. **trading_calendar** - 交易日历表
+
+#### 交易与持仓表
+8. **fills** - 成交记录表
+9. **positions** - 持仓快照表
+
+#### 系统管理表
+10. **system_state** - 系统状态/配置表
+11. **data_update_logs** - 数据更新日志表
+
+**标的池管理**：系统使用 `instruments.is_tradable` 字段直接标记可交易资产，通过 `update_tradable_universe()` 基于市场数据（价格、成交量）动态更新。初始候选池通过 CSV 文件管理（`csv/tradable_candidates.csv`），支持从 Russell 1000/2000、S&P 500 等指数爬取。
+
+---
+
+### 📊 详细表结构与 I/O 方法
+
+#### 1. instruments（资产主表）
+
+**用途**：统一管理所有交易资产（Stock/ETF/Cash），通过稳定的 `instrument_id` 解决 ticker 改名问题
+
+**表结构**：
+```sql
+CREATE TABLE instruments (
+    instrument_id BIGSERIAL PRIMARY KEY,          -- 稳定主键
+    ticker TEXT NOT NULL,                         -- 股票代码
+    exchange TEXT NOT NULL DEFAULT 'US',          -- 交易所
+    asset_type TEXT NOT NULL DEFAULT 'Stock',     -- 资产类型：Stock/ETF/Cash
+    currency TEXT NOT NULL DEFAULT 'USD',         -- 货币
+    
+    company_name TEXT,                            -- 公司名称
+    description TEXT,                             -- 描述
+    sector TEXT,                                  -- 行业分类
+    industry TEXT,                                -- 子行业
+    ipo_date DATE,                                -- 上市日期
+    delist_date DATE,                             -- 退市日期
+    
+    status TEXT NOT NULL DEFAULT 'active',        -- 状态：active/delisted/suspended/bankrupt
+    is_tradable BOOLEAN DEFAULT FALSE,            -- 是否在交易池中
+    is_factor_enabled BOOLEAN DEFAULT FALSE,      -- 是否启用因子计算
+    
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    
+    UNIQUE(ticker, exchange)
+);
+```
+
+**索引**：
+- `idx_instruments_ticker`
+- `idx_instruments_ticker_exchange`
+- `idx_instruments_tradable`
+- `idx_instruments_status`
+
+**I/O 方法**（`database/readwrite/rw_instruments.py`）：
+- `insert_instrument(conn, ticker, exchange, ...)` → int: 插入或更新资产，返回 instrument_id
+- `get_instrument_id(conn, ticker, exchange)` → Optional[int]: 根据 ticker 获取 ID
+- `get_instrument_by_id(conn, instrument_id)` → Optional[Dict]: 根据 ID 获取资产信息
+- `get_all_instruments(conn, asset_type, is_tradable)` → pd.DataFrame: 获取资产列表
+- `update_instrument_tradable(conn, instrument_id, is_tradable)`: 更新可交易状态
+
+---
+
+#### 2. instrument_identifiers（跨数据源映射表）
+
+**用途**：管理不同数据源的标识符映射（Tiingo/YFinance/CUSIP/ISIN）
+
+**表结构**：
+```sql
+CREATE TABLE instrument_identifiers (
+    instrument_id BIGINT NOT NULL REFERENCES instruments(instrument_id) ON DELETE CASCADE,
+    id_type TEXT NOT NULL,                        -- 标识符类型：tiingo/yfinance/cusip/isin/sedol/figi
+    id_value TEXT NOT NULL,                       -- 标识符值
+    valid_from DATE,                              -- 有效期开始
+    valid_to DATE,                                -- 有效期结束
+    created_at TIMESTAMPTZ DEFAULT now(),
+    
+    PRIMARY KEY (id_type, id_value, instrument_id)
+);
+```
+
+**I/O 方法**（`database/readwrite/rw_instrument_identifiers.py`）：
+- `insert_identifier(conn, instrument_id, id_type, id_value, ...)`
+- `get_instrument_by_identifier(conn, id_type, id_value)` → Optional[int]
+
+---
+
+#### 3. market_prices（市场价格表）
+
+**用途**：存储 Tiingo EOD 价格数据，包含完整 OHLCV 和复权后的价格
+
+**表结构**：
+```sql
+CREATE TABLE market_prices (
+    instrument_id BIGINT NOT NULL REFERENCES instruments(instrument_id) ON DELETE CASCADE,
+    date DATE NOT NULL,
+    
+    open_price NUMERIC(20,6),                     -- 开盘价
+    high_price NUMERIC(20,6),                     -- 最高价
+    low_price NUMERIC(20,6),                      -- 最低价
+    close_price NUMERIC(20,6) NOT NULL,           -- 收盘价
+    volume BIGINT,                                -- 成交量
+    
+    adj_open NUMERIC(20,6),                       -- 复权开盘价
+    adj_high NUMERIC(20,6),                       -- 复权最高价
+    adj_low NUMERIC(20,6),                        -- 复权最低价
+    adj_close NUMERIC(20,6) NOT NULL,             -- 复权收盘价
+    adj_volume BIGINT,                            -- 复权成交量
+    
+    dividends NUMERIC(20,6) DEFAULT 0,            -- 当日分红（美元）
+    stock_splits NUMERIC(20,6) DEFAULT 1,         -- 拆股因子（2.0=1拆2，0.5=2合1）
+    
+    data_source TEXT NOT NULL DEFAULT 'tiingo',
+    ingested_at TIMESTAMPTZ DEFAULT now(),
+    
+    PRIMARY KEY (instrument_id, date)
+);
+```
+
+**索引**：
+- `idx_prices_date`
+- `idx_prices_instrument_date`
+
+**I/O 方法**（`database/readwrite/rw_market_prices.py`）：
+- `insert_price(conn, instrument_id, date, close_price, adj_close, ...)`
+- `batch_insert_prices(conn, prices: List[Dict])`
+- `get_prices(conn, instrument_id, start_date, end_date)` → pd.DataFrame
+- `get_latest_price(conn, instrument_id)` → Optional[Dict]
+- `get_price_on_date(conn, instrument_id, date)` → Optional[Dict]
+- `delete_prices(conn, instrument_id, start_date, end_date)`
+- `get_price_max_date(conn)` → Optional[str]: 获取数据库中最新的价格日期
+
+---
+
+#### 4. corporate_actions（企业行为表）
+
+**用途**：记录分红、拆股、特殊股息等企业行为
+
+**表结构**：
+```sql
+CREATE TABLE corporate_actions (
+    instrument_id BIGINT NOT NULL REFERENCES instruments(instrument_id) ON DELETE CASCADE,
+    action_date DATE NOT NULL,
+    action_type TEXT NOT NULL,                    -- DIVIDEND_CASH/SPLIT/REVERSE_SPLIT/SPINOFF/SPECIAL_DIVIDEND
+    
+    action_value NUMERIC(20,6),                   -- 分红金额（每股）或拆股比例
+    currency TEXT DEFAULT 'USD',
+    
+    data_source TEXT DEFAULT 'tiingo',
+    raw_payload JSONB,                            -- Tiingo 原始返回数据
+    ingested_at TIMESTAMPTZ DEFAULT now(),
+    
+    PRIMARY KEY (instrument_id, action_date, action_type)
+);
+```
+
+**索引**：
+- `idx_corp_action_instrument_date`
+- `idx_corp_action_type`
+
+**I/O 方法**（`database/readwrite/rw_corporate_actions.py`）：
+- `insert_corporate_action(conn, instrument_id, action_date, action_type, action_value, ...)`
+- `batch_insert_corporate_actions(conn, actions: List[Dict])`
+- `get_corporate_actions(conn, instrument_id, action_type, start_date, end_date)` → pd.DataFrame
+- `get_latest_corporate_action_date(conn, instrument_id, action_type)` → Optional[str]
+- `delete_corporate_actions(conn, instrument_id, start_date, end_date)`
+
+---
+
+#### 5. fundamental_data（基本面数据表）
+
+**用途**：存储 SEC EDGAR 基本面数据（预留，暂未使用）
+
+**表结构**：
+```sql
+CREATE TABLE fundamental_data (
+    instrument_id BIGINT NOT NULL REFERENCES instruments(instrument_id) ON DELETE CASCADE,
+    report_date DATE NOT NULL,
+    metric_name TEXT NOT NULL,                    -- EPS/Revenue/NetIncome/ROE/PE/PB...
+    
+    metric_value NUMERIC(38,10),
+    period_type TEXT NOT NULL,                    -- TTM/Quarterly/Annual
+    period_start DATE,
+    period_end DATE,
+    
+    currency TEXT DEFAULT 'USD',
+    data_source TEXT DEFAULT 'sec_edgar',
+    ingested_at TIMESTAMPTZ DEFAULT now(),
+    
+    PRIMARY KEY (instrument_id, report_date, metric_name, period_type)
+);
+```
+
+**索引**：
+- `idx_fundamental_instrument_date`
+- `idx_fundamental_metric`
+
+**I/O 方法**（`database/readwrite/rw_fundamental_data.py`）：
+- `insert_fundamental(conn, instrument_id, report_date, metric_name, metric_value, ...)`
+- `get_fundamentals(conn, instrument_id, metric_name, start_date, end_date)` → pd.DataFrame
+
+---
+
+#### 6. factor_values（因子值表）
+
+**用途**：存储所有因子的计算结果（动量、波动率、美元成交量、跳空风险等）
+
+**表结构**：
+```sql
+CREATE TABLE factor_values (
+    instrument_id BIGINT NOT NULL REFERENCES instruments(instrument_id) ON DELETE CASCADE,
+    date DATE NOT NULL,
+    factor_name TEXT NOT NULL,                    -- 因子名称，如 'mom_252d_skip21', 'vol_60d'
+    
+    factor_value NUMERIC(38,10) NOT NULL,         -- 因子数值
+    
+    factor_args JSONB,                            -- 因子参数（lookback/skip/window/half_life 等）
+    config JSONB,                                 -- 预处理配置（winsor/zscore/universe/price_field 等）
+    
+    factor_version TEXT NOT NULL DEFAULT 'v1',    -- 因子版本（用于重算与并存）
+    
+    data_source TEXT NOT NULL DEFAULT 'internal',
+    ingested_at TIMESTAMPTZ DEFAULT now(),
+    
+    PRIMARY KEY (instrument_id, date, factor_name, factor_version)
+);
+```
+
+**索引**：
+- `idx_factor_values_name_date_ver`: 某因子某天的截面（选股/IC/分组）
+- `idx_factor_values_instrument_date`: 单标的因子时间序列
+- `idx_factor_values_date`: 某天的全部因子
+
+**I/O 方法**（`database/readwrite/rw_factor_values.py`）：
+- `insert_factor_value(conn, instrument_id, date, factor_name, factor_value, factor_version, factor_args, config, ...)`
+- `batch_insert_factor_values(conn, rows: List[Dict])`
+- `get_factor_values(conn, factor_name, factor_version, instrument_id, start_date, end_date)` → pd.DataFrame
+- `get_latest_factor_value(conn, instrument_id, factor_name, factor_version)` → Optional[Dict]
+- `get_factor_snapshot(conn, date, factor_name, factor_version)` → pd.DataFrame: 获取某天所有标的的某个因子值
+- `delete_factor_values(conn, factor_name, factor_version, instrument_id, start_date, end_date)`
+
+---
+
+#### 7. trading_calendar（交易日历表）
+
+**用途**：记录美股交易日历，标记交易日和节假日
+
+**表结构**：
+```sql
+CREATE TABLE trading_calendar (
+    market TEXT NOT NULL DEFAULT 'US',
+    date DATE NOT NULL,
+    is_trading_day BOOLEAN NOT NULL,              -- 是否交易日
+    holiday_name TEXT,                            -- 节假日名称
+    
+    PRIMARY KEY (market, date)
+);
+```
+
+**索引**：
+- `idx_trading_calendar_date`
+
+**I/O 方法**（`database/readwrite/rw_trading_calendar.py`）：
+- `insert_trading_day(conn, date, is_trading_day, holiday_name, market='US')`
+- `batch_insert_trading_days(conn, days: List[Dict])`
+- `is_trading_day(conn, date, market='US')` → bool
+- `get_trading_days(conn, start_date, end_date, market='US')` → pd.DataFrame
+- `get_next_trading_day(conn, date, market='US')` → Optional[str]
+- `get_prev_trading_day(conn, date, market='US')` → Optional[str]
+
+---
+
+#### 8. fills（成交记录表）
+
+**用途**：记录所有买卖成交记录
+
+**表结构**：
+```sql
+CREATE TABLE fills (
+    fill_id BIGSERIAL PRIMARY KEY,
+    instrument_id BIGINT NOT NULL REFERENCES instruments(instrument_id) ON DELETE CASCADE,
+    side TEXT NOT NULL,                           -- BUY/SELL
+    
+    quantity NUMERIC(20,8) NOT NULL,              -- 成交数量
+    price NUMERIC(20,6) NOT NULL,                 -- 成交价格
+    trade_time TIMESTAMPTZ NOT NULL,              -- 成交时间
+    
+    commission NUMERIC(20,6) DEFAULT 0,           -- 佣金
+    fees NUMERIC(20,6) DEFAULT 0,                 -- 其他费用
+    fx_rate NUMERIC(20,8),                        -- 汇率
+    
+    notes TEXT,
+    source TEXT DEFAULT 'manual',                 -- manual/ibkr/csv_import/api
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+```
+
+**索引**：
+- `idx_fills_instrument_time`
+- `idx_fills_trade_time`
+
+**I/O 方法**（`database/readwrite/rw_fills.py`）：
+- `insert_fill(conn, instrument_id, side, quantity, price, trade_time, commission, fees, ...)`
+- `get_fills(conn, instrument_id, start_date, end_date)` → pd.DataFrame
+- `get_fill_by_id(conn, fill_id)` → Optional[Dict]
+- `delete_fill(conn, fill_id)`
+
+---
+
+#### 9. positions（持仓快照表）
+
+**用途**：记录每日持仓快照
+
+**表结构**：
+```sql
+CREATE TABLE positions (
+    date DATE NOT NULL,
+    instrument_id BIGINT NOT NULL REFERENCES instruments(instrument_id) ON DELETE CASCADE,
+    
+    quantity NUMERIC(20,8) NOT NULL,              -- 持仓数量
+    cost_basis NUMERIC(20,6),                     -- 成本基础
+    last_price NUMERIC(20,6),                     -- 估值价格
+    market_value NUMERIC(20,6),                   -- 市值
+    
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    source TEXT DEFAULT 'computed',               -- computed/manual_adjust
+    
+    PRIMARY KEY (date, instrument_id)
+);
+```
+
+**索引**：
+- `idx_positions_date`
+
+**I/O 方法**（`database/readwrite/rw_positions.py`）：
+- `insert_position(conn, date, instrument_id, quantity, cost_basis, last_price, market_value, ...)`
+- `batch_insert_positions(conn, positions: List[Dict])`
+- `get_positions(conn, date)` → pd.DataFrame
+- `get_position_history(conn, instrument_id, start_date, end_date)` → pd.DataFrame
+- `delete_positions(conn, date)`
+
+---
+
+#### 10. system_state（系统状态表）
+
+**用途**：存储系统配置和状态（现金资产 ID、最后更新时间等）
+
+**表结构**：
+```sql
+CREATE TABLE system_state (
+    key TEXT PRIMARY KEY,                         -- 状态键
+    value JSONB,                                  -- 状态值（JSON 格式）
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+```
+
+**I/O 方法**（`database/readwrite/rw_system_state.py`）：
+- `set_state(conn, key, value: Dict)`
+- `get_state(conn, key)` → Optional[Dict]
+- `delete_state(conn, key)`
+
+**常用状态键**：
+- `cash_instrument_id`: 现金资产的 instrument_id
+- `last_price_update`: 最后一次价格更新时间
+- `last_universe_update`: 最后一次标的池更新时间
+
+---
+
+#### 11. data_update_logs（数据更新日志表）
+
+**用途**：监控数据更新任务的执行情况（Tiingo API 调用、因子计算等）
+
+**表结构**：
+```sql
+CREATE TABLE data_update_logs (
+    log_id BIGSERIAL PRIMARY KEY,
+    dataset TEXT NOT NULL,                        -- market_prices/fundamental_data/universe/instruments
+    source TEXT NOT NULL,                         -- 数据源
+    
+    start_date DATE,                              -- 更新起始日期
+    end_date DATE,                                -- 更新结束日期
+    instruments_count INT,                        -- 标的数量
+    rows_inserted INT,                            -- 插入行数
+    rows_updated INT,                             -- 更新行数
+    
+    status TEXT NOT NULL DEFAULT 'running',       -- running/completed/failed/partial
+    error_message TEXT,
+    
+    started_at TIMESTAMPTZ DEFAULT now(),
+    completed_at TIMESTAMPTZ,
+    duration_seconds INT
+);
+```
+
+**索引**：
+- `idx_update_logs_dataset`
+- `idx_update_logs_status`
+
+**I/O 方法**（`database/readwrite/rw_data_update_logs.py`）：
+- `create_log(conn, dataset, source, start_date, end_date, instruments_count)` → int: 创建日志，返回 log_id
+- `update_log_success(conn, log_id, rows_inserted, rows_updated)`: 更新日志为成功状态
+- `update_log_failure(conn, log_id, error_message)`: 更新日志为失败状态
+- `get_recent_logs(conn, dataset, limit)` → pd.DataFrame: 获取最近的日志记录
+
+---
+
+## �🔄 业务逻辑
 
 ### 1. 数据流水线
 
@@ -94,10 +513,7 @@ Yezhou-Quant-Real/
          ↓
 ┌─────────────────┐
 │ instruments     │ 标的主表（ticker → instrument_id）
-└────────┬────────┘
-         ↓
-┌─────────────────┐
-│ universe_members│ 标的池成员（可交易股票池）
+│  .is_tradable   │ 动态标记可交易资产（基于价格/成交量）
 └────────┬────────┘
          ↓
 ┌─────────────────┐
@@ -216,556 +632,7 @@ conn.commit()
 
 ---
 
-## 🗄️ 数据库结构（PostgreSQL）⭐ 最关键
-
-### 表结构总览（14张表）
-
-| 表名 | 作用 | 主键 |
-|------|------|------|
-| `instruments` | 资产主表（Stock/ETF/Cash） | `instrument_id` |
-| `instrument_identifiers` | 多标识符映射（CUSIP/ISIN/FIGI） | `(instrument_id, id_type)` |
-| `market_prices` | Tiingo EOD价格（OHLCV+复权） | `(instrument_id, date)` |
-| `fundamental_data` | 基本面数据（预留，暂未使用） | `(instrument_id, report_date, metric_name, period_type)` |
-| `universe_definitions` | 标的池定义（SP500/NASDAQ100） | `universe_id` |
-| `universe_snapshots` | 标的池快照（每日成员） | `(universe_id, snapshot_date)` |
-| `universe_members` | 标的池成员列表 | `(universe_id, instrument_id, valid_from)` |
-| `trading_calendar` | 交易日历 | `(market, date)` |
-| `corporate_actions` | 企业行为（分红/拆股） | `(instrument_id, ex_date, action_type)` |
-| `factor_values` | 因子值存储 | `(instrument_id, date, factor_name, factor_version)` |
-| `fills` | 成交记录 | `fill_id` |
-| `positions` | 持仓快照 | `(date, instrument_id)` |
-| `system_state` | 系统状态（当前日期等） | `state_key` |
-| `data_update_logs` | 数据更新日志 | `log_id` |
-
----
-
-### 核心表详细结构
-
-#### 1️⃣ `instruments` - 资产主表
-
-```sql
-CREATE TABLE instruments (
-    instrument_id BIGSERIAL PRIMARY KEY,
-    
-    -- 标识信息
-    ticker TEXT NOT NULL,
-    exchange TEXT NOT NULL DEFAULT 'US',
-    asset_type TEXT NOT NULL DEFAULT 'Stock',  -- Stock/ETF/Cash
-    currency TEXT NOT NULL DEFAULT 'USD',
-    
-    -- 元数据
-    company_name TEXT,
-    description TEXT,
-    sector TEXT,           -- GICS Sector
-    industry TEXT,         -- GICS Industry
-    ipo_date DATE,
-    delist_date DATE,
-    
-    -- 状态标记
-    status TEXT NOT NULL DEFAULT 'active',     -- active/delisted/suspended/bankrupt
-    is_tradable BOOLEAN DEFAULT FALSE,         -- 是否在交易池中
-    is_factor_enabled BOOLEAN DEFAULT FALSE,   -- 是否参与因子计算
-    
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now(),
-    
-    UNIQUE(ticker, exchange)
-);
-```
-
-**设计要点**：
-- `instrument_id` 是稳定主键，解决 ticker 改名问题
-- `is_tradable` 从 universe_members 同步，用于快速筛选
-- `sector/industry` 用于行业中性化
-
----
-
-#### 2️⃣ `market_prices` - 市场价格
-
-```sql
-CREATE TABLE market_prices (
-    instrument_id BIGINT NOT NULL REFERENCES instruments(instrument_id) ON DELETE CASCADE,
-    date DATE NOT NULL,
-    
-    -- 原始价格（未复权）
-    open_price NUMERIC(20,6),
-    high_price NUMERIC(20,6),
-    low_price NUMERIC(20,6),
-    close_price NUMERIC(20,6) NOT NULL,
-    volume BIGINT,
-    
-    -- 复权价格（向后复权）
-    adj_open NUMERIC(20,6),
-    adj_high NUMERIC(20,6),
-    adj_low NUMERIC(20,6),
-    adj_close NUMERIC(20,6) NOT NULL,
-    adj_volume BIGINT,
-    
-    -- 企业行为
-    dividends NUMERIC(20,6) DEFAULT 0,        -- 当日分红（美元）
-    stock_splits NUMERIC(20,6) DEFAULT 1,     -- 拆股因子（2.0=1拆2, 0.5=2合1）
-    
-    data_source TEXT NOT NULL DEFAULT 'tiingo',
-    ingested_at TIMESTAMPTZ DEFAULT now(),
-    
-    PRIMARY KEY (instrument_id, date)
-);
-```
-
-**索引**：
-- `idx_prices_date` - 按日期查询（截面数据）
-- `idx_prices_instrument_date` - 单标的时间序列
-
----
-
-#### 3️⃣ `factor_values` - 因子值存储 ⭐
-
-```sql
-CREATE TABLE factor_values (
-    instrument_id BIGINT NOT NULL REFERENCES instruments(instrument_id) ON DELETE CASCADE,
-    date DATE NOT NULL,
-    factor_name TEXT NOT NULL,                -- mom_252d_skip21, vol_60d, adv_20d
-    
-    factor_value NUMERIC(38,10) NOT NULL,     -- 因子标量值
-    
-    -- 因子参数（lookback, skip, window, half_life等）
-    factor_args JSONB,
-    
-    -- 预处理配置（winsor, zscore, universe, price_field等）
-    config JSONB,
-    
-    -- 因子版本（v1, v2, ...）用于重算与并存
-    factor_version TEXT NOT NULL DEFAULT 'v1',
-    
-    data_source TEXT NOT NULL DEFAULT 'internal',
-    ingested_at TIMESTAMPTZ DEFAULT now(),
-    
-    PRIMARY KEY (instrument_id, date, factor_name, factor_version)
-);
-```
-
-**设计要点**：
-- 一行 = 一个标的 × 一天 × 一个因子 × 一个版本 → 一个数值
-- `factor_args` 示例：`{"lookback": 252, "skip": 21}`
-- `config` 示例：`{"winsor": [0.01, 0.99], "zscore": true, "universe": "sp500"}`
-- 支持因子版本并存，方便 A/B 测试
-
-**索引**：
-```sql
--- 某因子某天的截面（选股/IC/分组）
-idx_factor_values_name_date_ver ON (factor_name, date, factor_version)
-
--- 单标的因子时间序列
-idx_factor_values_instrument_date ON (instrument_id, date)
-
--- 某天取全部因子（构建训练集/回测）
-idx_factor_values_date ON (date)
-```
-
----
-
-#### 4️⃣ `universe_definitions` - 标的池定义
-
-```sql
-CREATE TABLE universe_definitions (
-    universe_id SERIAL PRIMARY KEY,
-    universe_key TEXT NOT NULL UNIQUE,     -- 'sp500', 'nasdaq100', 'custom_tech'
-    display_name TEXT NOT NULL,            -- 'S&P 500', 'NASDAQ 100'
-    source_type TEXT NOT NULL,             -- wikipedia/manual/api/file_import
-    source_ref TEXT,                       -- 数据源URL或文件路径
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-```
-
----
-
-#### 5️⃣ `universe_members` - 标的池成员
-
-```sql
-CREATE TABLE universe_members (
-    universe_id INT NOT NULL REFERENCES universe_definitions(universe_id) ON DELETE CASCADE,
-    instrument_id BIGINT NOT NULL REFERENCES instruments(instrument_id) ON DELETE CASCADE,
-    
-    valid_from DATE NOT NULL,              -- 生效日期
-    valid_to DATE DEFAULT '2100-01-01',    -- 失效日期（9999=永久有效）
-    
-    reason TEXT,                           -- 加入/移除原因
-    ingested_at TIMESTAMPTZ DEFAULT now(),
-    
-    PRIMARY KEY (universe_id, instrument_id, valid_from)
-);
-```
-
-**使用方式**：
-```sql
--- 查询某天的可交易标的
-SELECT instrument_id FROM universe_members
-WHERE universe_id = 1
-  AND valid_from <= '2024-01-15'
-  AND valid_to > '2024-01-15';
-```
-
----
-
-#### 6️⃣ `trading_calendar` - 交易日历
-
-```sql
-CREATE TABLE trading_calendar (
-    market TEXT NOT NULL DEFAULT 'US',
-    date DATE NOT NULL,
-    is_trading_day BOOLEAN NOT NULL,
-    holiday_name TEXT,
-    
-    PRIMARY KEY (market, date)
-);
-```
-
-**数据来源**：`pandas_market_calendars` 库
-
----
-
-#### 7️⃣ `corporate_actions` - 企业行为
-
-```sql
-CREATE TABLE corporate_actions (
-    instrument_id BIGINT NOT NULL REFERENCES instruments(instrument_id) ON DELETE CASCADE,
-    ex_date DATE NOT NULL,
-    action_type TEXT NOT NULL,             -- dividend/split/merger/spinoff
-    
-    amount NUMERIC(20,6),                  -- 分红金额或拆股比例
-    currency TEXT DEFAULT 'USD',
-    
-    declaration_date DATE,
-    record_date DATE,
-    payment_date DATE,
-    
-    data_source TEXT DEFAULT 'tiingo',
-    ingested_at TIMESTAMPTZ DEFAULT now(),
-    
-    PRIMARY KEY (instrument_id, ex_date, action_type)
-);
-```
-
-**用途**：
-- 复权价格验证
-- 分红再投资策略
-- 拆股事件过滤
-
----
-
-#### 8️⃣ `positions` - 持仓快照
-
-```sql
-CREATE TABLE positions (
-    date DATE NOT NULL,
-    instrument_id BIGINT NOT NULL REFERENCES instruments(instrument_id) ON DELETE CASCADE,
-    
-    quantity NUMERIC(20,8) NOT NULL,       -- 持仓数量
-    cost_basis NUMERIC(20,6),              -- 成本价
-    last_price NUMERIC(20,6),              -- 估值价格
-    market_value NUMERIC(20,6),            -- 市值
-    
-    updated_at TIMESTAMPTZ DEFAULT now(),
-    source TEXT DEFAULT 'computed',        -- computed/manual_adjust
-    
-    PRIMARY KEY (date, instrument_id)
-);
-```
-
----
-
-#### 9️⃣ `fills` - 成交记录
-
-```sql
-CREATE TABLE fills (
-    fill_id BIGSERIAL PRIMARY KEY,
-    
-    instrument_id BIGINT NOT NULL REFERENCES instruments(instrument_id) ON DELETE CASCADE,
-    trade_date DATE NOT NULL,
-    
-    side TEXT NOT NULL,                    -- buy/sell
-    quantity NUMERIC(20,8) NOT NULL,
-    price NUMERIC(20,6) NOT NULL,
-    
-    commission NUMERIC(20,6) DEFAULT 0,
-    slippage NUMERIC(20,6) DEFAULT 0,
-    
-    order_type TEXT DEFAULT 'market',      -- market/limit/stop
-    strategy_name TEXT,
-    
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-```
-
----
-
-#### 🔟 `data_update_logs` - 数据更新日志
-
-```sql
-CREATE TABLE data_update_logs (
-    log_id BIGSERIAL PRIMARY KEY,
-    
-    job_name TEXT NOT NULL,                -- price_download, universe_update
-    start_time TIMESTAMPTZ NOT NULL,
-    end_time TIMESTAMPTZ,
-    
-    status TEXT NOT NULL,                  -- success/failed/running
-    rows_affected INT,
-    error_message TEXT,
-    
-    metadata JSONB
-);
-```
-
----
-
-## 🔌 必要的 RW 方法
-
-### 1. `rw_instruments.py` - 资产管理
-
-```python
-# 插入/更新资产
-insert_instrument(
-    conn, ticker="AAPL", exchange="US", 
-    company_name="Apple Inc.", sector="Technology"
-) -> int  # 返回 instrument_id
-
-# 根据 ticker 获取 ID
-get_instrument_id(conn, ticker="AAPL", exchange="US") -> int
-
-# 根据 ID 获取资产信息
-get_instrument_by_id(conn, instrument_id=123) -> dict
-
-# 批量获取所有可交易资产
-get_all_tradable_instruments(conn) -> pd.DataFrame
-
-# 更新行业信息
-update_instrument_sector_industry(
-    conn, instrument_id=123, 
-    sector="Technology", industry="Consumer Electronics"
-)
-
-# 标记资产为可交易/不可交易
-mark_tradable(conn, instrument_id=123, is_tradable=True)
-```
-
----
-
-### 2. `rw_market_prices.py` - 价格数据
-
-```python
-# 插入单条价格
-insert_price(
-    conn, instrument_id=123, date="2024-01-15",
-    close_price=150.50, adj_close=145.20,
-    volume=1000000, dividends=0, stock_splits=1
-)
-
-# 批量插入价格（高效）
-batch_insert_prices(conn, prices: List[Dict])
-
-# 获取价格数据
-get_prices(
-    conn, instrument_id=123,
-    start_date="2024-01-01", end_date="2024-12-31"
-) -> pd.DataFrame
-
-# 获取最新价格
-get_latest_price(conn, instrument_id=123) -> dict
-
-# 获取某天所有股票的价格（截面数据）
-get_cross_section_prices(conn, date="2024-01-15") -> pd.DataFrame
-```
-
----
-
-### 3. `rw_factor_values.py` - 因子值 ⭐
-
-```python
-# 插入单条因子值
-insert_factor_value(
-    conn,
-    instrument_id=123,
-    date="2024-01-15",
-    factor_name="mom_252d_skip21",
-    factor_value=0.15,
-    factor_version="v1",
-    factor_args={"lookback": 252, "skip": 21},
-    config={"winsor": [0.01, 0.99]}
-)
-
-# 批量插入因子值（高效）
-batch_insert_factor_values(conn, rows: List[Dict])
-
-# 获取某因子某天的截面数据（用于选股）
-get_factor_cross_section(
-    conn, 
-    factor_name="mom_252d_skip21", 
-    date="2024-01-15",
-    factor_version="v1"
-) -> pd.DataFrame  # 列：instrument_id, ticker, factor_value
-
-# 获取单标的多因子时间序列（用于回测）
-get_factor_timeseries(
-    conn, 
-    instrument_id=123,
-    start_date="2024-01-01", 
-    end_date="2024-12-31"
-) -> pd.DataFrame  # 列：date, mom_252d, vol_60d, adv_20d...
-
-# 删除旧版本因子（重算时）
-delete_factor_values(
-    conn, 
-    factor_name="mom_252d_skip21",
-    factor_version="v1",
-    start_date="2024-01-01", 
-    end_date="2024-12-31"
-)
-```
-
----
-
-### 4. `rw_universe.py` - 标的池管理
-
-```python
-# 创建标的池定义
-create_universe_definition(
-    conn, 
-    universe_key="sp500", 
-    display_name="S&P 500",
-    source_type="wikipedia"
-) -> int  # 返回 universe_id
-
-# 批量添加标的池成员
-batch_add_universe_members(
-    conn,
-    universe_id=1,
-    instrument_ids=[123, 456, 789],
-    valid_from="2024-01-01"
-)
-
-# 获取某天的标的池成员
-get_universe_members_on_date(
-    conn, 
-    universe_key="sp500", 
-    date="2024-01-15"
-) -> List[int]  # 返回 instrument_id 列表
-
-# 更新标的池快照（每日任务）
-update_universe_snapshot(
-    conn, 
-    universe_id=1, 
-    snapshot_date="2024-01-15",
-    member_count=500
-)
-```
-
----
-
-### 5. `rw_trading_calendar.py` - 交易日历
-
-```python
-# 批量插入交易日历
-batch_insert_trading_days(conn, calendar_df: pd.DataFrame)
-
-# 检查是否为交易日
-is_trading_day(conn, date="2024-01-15", market="US") -> bool
-
-# 获取下一个交易日
-get_next_trading_day(conn, date="2024-01-15", market="US") -> str
-
-# 获取日期范围内的所有交易日
-get_trading_days(
-    conn, 
-    start_date="2024-01-01", 
-    end_date="2024-12-31",
-    market="US"
-) -> List[str]
-```
-
----
-
-### 6. `rw_corporate_actions.py` - 企业行为
-
-```python
-# 插入企业行为
-insert_corporate_action(
-    conn,
-    instrument_id=123,
-    ex_date="2024-01-15",
-    action_type="dividend",
-    amount=0.50,
-    record_date="2024-01-10",
-    payment_date="2024-01-20"
-)
-
-# 获取某期间的企业行为
-get_corporate_actions(
-    conn,
-    instrument_id=123,
-    start_date="2024-01-01",
-    end_date="2024-12-31"
-) -> pd.DataFrame
-```
-
----
-
-### 7. `rw_positions.py` - 持仓管理
-
-```python
-# 更新持仓快照
-upsert_position(
-    conn,
-    date="2024-01-15",
-    instrument_id=123,
-    quantity=100,
-    cost_basis=150.0,
-    last_price=155.0,
-    market_value=15500.0
-)
-
-# 获取某天的持仓
-get_positions_on_date(conn, date="2024-01-15") -> pd.DataFrame
-
-# 计算持仓市值
-calculate_portfolio_value(conn, date="2024-01-15") -> float
-```
-
----
-
-### 8. `rw_fills.py` - 成交记录
-
-```python
-# 记录成交
-insert_fill(
-    conn,
-    instrument_id=123,
-    trade_date="2024-01-15",
-    side="buy",
-    quantity=100,
-    price=150.50,
-    commission=1.0,
-    slippage=0.05
-)
-
-# 获取某期间的成交记录
-get_fills(
-    conn,
-    start_date="2024-01-01",
-    end_date="2024-12-31"
-) -> pd.DataFrame
-```
-
----
-
 ## 🧪 因子开发指南
-
-### 当前已实现的因子
-
-1. **动量因子（Momentum）** - `factors/momentum.py`
-   - `mom_252d_skip21`：252天动量，跳过最近21天
-   - 计算公式：(price_t-21 / price_t-273) - 1
-   - 用途：捕捉中期趋势，避免短期反转
 
 ### 新因子开发流程
 
@@ -850,18 +717,19 @@ LIMIT 50;
 -- 3. 计算相关系数
 ```
 
-### 3. 查询标的池历史成员变化
+### 3. 查询可交易标的列表
 
 ```sql
 SELECT 
-    i.ticker,
-    um.valid_from,
-    um.valid_to,
-    um.reason
-FROM universe_members um
-JOIN instruments i ON um.instrument_id = i.instrument_id
-WHERE um.universe_id = (SELECT universe_id FROM universe_definitions WHERE universe_key = 'sp500')
-ORDER BY um.valid_from DESC;
+    instrument_id,
+    ticker,
+    company_name,
+    sector,
+    industry
+FROM instruments
+WHERE is_tradable = TRUE
+  AND asset_type = 'Stock'
+ORDER BY ticker;
 ```
 
 ### 4. 查看数据更新日志
@@ -988,59 +856,6 @@ python main.py
 - [ ] 因子有效性分析（IC、分组回测、因子相关性）
 - [ ] 风险管理模块（VaR、最大回撤限制）
 - [ ] 可视化面板（因子IC、持仓分布、收益曲线）
-
----
-
-## 🤖 给 ChatGPT 的因子建议提示词
-
-```
-我正在开发一个美股量化系统，数据库结构如下：
-
-核心表：
-1. instruments - 资产主表（ticker, sector, industry）
-2. market_prices - 日线价格（OHLCV + 复权价格）
-3. factor_values - 因子值（instrument_id, date, factor_name, factor_value）
-
-已实现因子（共6个）：
-1. mom_252d_skip21：动量因子（252天回溯，跳过21天）
-   计算公式：(price_t-21 / price_t-273) - 1
-   
-2. vol_60d_ann252：波动率因子（60天窗口，年化252天）
-   计算公式：std(daily_returns) * sqrt(252)
-   
-3. volvol_60d_from_vol20d：波动率的波动率
-   计算公式：std(rolling_volatility_20d, window=60)
-   
-4. dv_20d_log：美元成交量因子（20天均值，取对数）
-   计算公式：log(mean(adj_close * adj_volume))
-   
-5. jump_60d_max/cnt：跳空风险因子（60天窗口）
-   计算公式：abs((high - low) / close - 1) 超过阈值的最大值和次数
-   
-6. mdd_252d：最大回撤因子（252天窗口）
-   计算公式：max((running_max - price) / running_max)
-
-数据特点：
-- 标的池：S&P 500 成分股
-- 频率：日线
-- 数据源：Tiingo EOD
-- 回测期：2005-至今
-
-请基于以下原则建议 3-5 个新因子：
-1. 能用 market_prices 表直接计算（无需基本面数据）
-2. 与已有因子低相关（避免冗余）
-3. 有学术研究支持或实践验证
-4. 计算简单、稳定性强
-5. 适合日线级别交易
-
-请给出：
-- 因子名称
-- 计算公式
-- Python 实现伪代码
-- 理论依据（为什么有效）
-- 建议持有期和换手率
-- 与已有因子的差异性
-```
 
 ---
 

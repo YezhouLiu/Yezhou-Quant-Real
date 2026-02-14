@@ -132,7 +132,6 @@ def pivot_factors_long_to_wide(
     """
     长表 -> 宽表：每个 factor_name 变成一列。
     """
-    # 缺列直接炸
     for c in (id_col, factor_col, value_col):
         if c not in df_long.columns:
             raise KeyError(f"missing column in df_long: {c}")
