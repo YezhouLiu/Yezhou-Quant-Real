@@ -184,3 +184,107 @@ def test_delete_factor_values_builds_query(mock_conn):
     assert "factor_name = %s" in sql
     assert "factor_version = %s" in sql
     assert params == ["mom_21d", "v1"]
+
+
+def test_get_factor_values_with_factor_names_list(mock_conn):
+    """测试多因子名查询"""
+    conn, cursor = mock_conn
+    cursor.description = [
+        ("instrument_id",),
+        ("date",),
+        ("factor_name",),
+        ("factor_value",),
+    ]
+    cursor.fetchall.return_value = [
+        (1, "2026-01-01", "mom_21d", 0.1),
+        (1, "2026-01-01", "vol_20d", 0.2),
+    ]
+
+    df = get_factor_values(
+        conn,
+        factor_names=["mom_21d", "vol_20d"],
+        date="2026-01-01",
+    )
+
+    assert len(df) == 2
+    sql = cursor.execute.call_args[0][0]
+    params = cursor.execute.call_args[0][1]
+    assert "factor_name = ANY(%s)" in sql
+    assert params[0] == ["mom_21d", "vol_20d"]
+    assert params[1] == "2026-01-01"
+
+
+def test_get_factor_values_with_instrument_ids_list(mock_conn):
+    """测试多标的 ID 查询"""
+    conn, cursor = mock_conn
+    cursor.description = [
+        ("instrument_id",),
+        ("date",),
+        ("factor_name",),
+        ("factor_value",),
+    ]
+    cursor.fetchall.return_value = [
+        (1, "2026-01-01", "mom_21d", 0.1),
+        (2, "2026-01-01", "mom_21d", 0.2),
+    ]
+
+    df = get_factor_values(
+        conn,
+        factor_name="mom_21d",
+        instrument_ids=[1, 2],
+        date="2026-01-01",
+    )
+
+    assert len(df) == 2
+    sql = cursor.execute.call_args[0][0]
+    params = cursor.execute.call_args[0][1]
+    assert "instrument_id = ANY(%s)" in sql
+    assert [1, 2] in params
+
+
+def test_get_factor_values_mutual_exclusion_factor_name(mock_conn):
+    """测试 factor_name 和 factor_names 互斥"""
+    conn, cursor = mock_conn
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        get_factor_values(
+            conn,
+            factor_name="mom_21d",
+            factor_names=["vol_20d"],
+        )
+
+
+def test_get_factor_values_mutual_exclusion_instrument_id(mock_conn):
+    """测试 instrument_id 和 instrument_ids 互斥"""
+    conn, cursor = mock_conn
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        get_factor_values(
+            conn,
+            instrument_id=1,
+            instrument_ids=[1, 2],
+        )
+
+
+def test_get_factor_values_mutual_exclusion_date(mock_conn):
+    """测试 date 与 start_date/end_date 互斥"""
+    conn, cursor = mock_conn
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        get_factor_values(
+            conn,
+            date="2026-01-01",
+            start_date="2026-01-01",
+        )
+
+
+def test_get_factor_values_empty_lists_raise(mock_conn):
+    """测试空列表报错"""
+    conn, cursor = mock_conn
+
+    with pytest.raises(ValueError, match="cannot be empty"):
+        get_factor_values(conn, factor_names=[])
+
+    with pytest.raises(ValueError, match="cannot be empty"):
+        get_factor_values(conn, instrument_ids=[])
+

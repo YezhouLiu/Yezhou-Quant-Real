@@ -1,6 +1,7 @@
 from typing import List, Dict, Optional
 import pandas as pd
 from utils.logger import get_logger
+from engine.constants import CASH_INSTRUMENT_ID
 
 log = get_logger("rw_exp_positions")
 
@@ -128,6 +129,64 @@ def get_exp_nav(conn, start_date: str = None, end_date: str = None) -> pd.DataFr
         GROUP BY date
         ORDER BY date
     """
+
+    cursor = conn.cursor()
+    cursor.execute(query, params)
+
+    columns = [desc[0] for desc in cursor.description]
+    return pd.DataFrame(cursor.fetchall(), columns=columns)
+
+
+def get_cash_only(
+    conn, date: str = None, start_date: str = None, end_date: str = None
+) -> pd.DataFrame:
+    """
+    仅查询现金持仓（instrument_id = 0）
+    """
+    query = f"SELECT * FROM exp_positions WHERE instrument_id = {CASH_INSTRUMENT_ID}"
+    params = []
+
+    if date:
+        query += " AND date = %s"
+        params.append(date)
+    else:
+        if start_date:
+            query += " AND date >= %s"
+            params.append(start_date)
+        if end_date:
+            query += " AND date <= %s"
+            params.append(end_date)
+
+    query += " ORDER BY date DESC"
+
+    cursor = conn.cursor()
+    cursor.execute(query, params)
+
+    columns = [desc[0] for desc in cursor.description]
+    return pd.DataFrame(cursor.fetchall(), columns=columns)
+
+
+def get_stock_positions_only(
+    conn, date: str = None, start_date: str = None, end_date: str = None
+) -> pd.DataFrame:
+    """
+    仅查询股票持仓（排除现金）
+    """
+    query = f"SELECT * FROM exp_positions WHERE instrument_id != {CASH_INSTRUMENT_ID}"
+    params = []
+
+    if date:
+        query += " AND date = %s"
+        params.append(date)
+    else:
+        if start_date:
+            query += " AND date >= %s"
+            params.append(start_date)
+        if end_date:
+            query += " AND date <= %s"
+            params.append(end_date)
+
+    query += " ORDER BY date DESC, market_value DESC"
 
     cursor = conn.cursor()
     cursor.execute(query, params)

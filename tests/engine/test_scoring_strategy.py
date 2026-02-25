@@ -34,7 +34,6 @@ def test_scoring_strategy_calls_pipeline(monkeypatch):
         factor_specs=(FactorSpec("mom", True),),
         scorer=scorer,
         factor_version="v1",
-        table="factor_values",
     )
 
     conn = MagicMock()

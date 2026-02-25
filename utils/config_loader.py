@@ -16,7 +16,9 @@ load_dotenv(PROJECT_ROOT / "secrets.env")
 # 配置加载器（支持环境变量覆盖）
 # 优先级：环境变量 > config.yaml
 # ----------------------------------------------------------------------------------------------------------------------------------------
-def load_config(path: str = "config/config.yaml"):
+def load_config(path: str = None):
+    if path is None:
+        path = str(PROJECT_ROOT / "config" / "config.yaml")
     """
     加载配置文件，支持环境变量覆盖
     
@@ -78,7 +80,7 @@ def get_secret(key: str, default: str = "") -> str:
 # 例如：get_config_value(config, "database.host") 或 get_config
 # ----------------------------------------------------------------------------------------------------------------------------------------
 def get_config_value(
-    key: str, default: Any = None, config_path: str = "config/config.yaml"
+    key: str, default: Any = None, config_path: str = None
 ) -> Any:
     keys = key.split(".")
     value = load_config(config_path)
@@ -94,6 +96,6 @@ def get_config_value(
 # 获取配置值并转换为日期类型
 # ----------------------------------------------------------------------------------------------------------------------------------------
 def get_config_value_as_date(
-    key: str, default: str = "", config_path: str = "config/config.yaml"
+    key: str, default: str = "", config_path: str = None
 ) -> date:
     return date.fromisoformat(get_config_value(key, default, config_path))

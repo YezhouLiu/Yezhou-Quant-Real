@@ -8,7 +8,7 @@ log = get_logger("rw_instruments")
 def insert_instrument(
     conn,
     ticker: str,
-    exchange: str = "US",
+    exchange: str = "UNKNOWN",
     asset_type: str = "Stock",
     currency: str = "USD",
     company_name: str = None,
@@ -60,19 +60,73 @@ def insert_instrument(
     return instrument_id
 
 
-def get_instrument_id(conn, ticker: str, exchange: str = "US") -> Optional[int]:
-    """获取资产ID"""
+def get_instrument_id(conn, ticker: str, exchange: str = None) -> Optional[int]:
+    """根据 ticker 查询 instrument_id。
+    不传 exchange 时仅按 ticker 匹配，有多条记录时返回 instrument_id 最小的一条。
+    """
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT instrument_id FROM instruments
-        WHERE ticker = %s AND exchange = %s
-    """,
-        (ticker, exchange),
-    )
+    if exchange is not None:
+        cursor.execute(
+            "SELECT instrument_id FROM instruments WHERE ticker = %s AND exchange = %s",
+            (ticker, exchange),
+        )
+    else:
+        cursor.execute(
+            "SELECT instrument_id FROM instruments WHERE ticker = %s ORDER BY instrument_id LIMIT 1",
+            (ticker,),
+        )
 
     result = cursor.fetchone()
     return result[0] if result else None
+
+
+def get_instrument_by_ticker(conn, ticker: str, exchange: str = None) -> Optional[Dict]:
+    """根据 ticker 查询完整资产信息，exchange 可选。
+    不传 exchange 时按 ticker 匹配，有多条记录时返回 instrument_id 最小的一条。
+    """
+    cursor = conn.cursor()
+    if exchange is not None:
+        cursor.execute(
+            """
+            SELECT instrument_id, ticker, exchange, asset_type, currency, company_name,
+                   description, sector, industry, ipo_date, delist_date, status, is_tradable,
+                   created_at, updated_at
+            FROM instruments WHERE ticker = %s AND exchange = %s
+            """,
+            (ticker, exchange),
+        )
+    else:
+        cursor.execute(
+            """
+            SELECT instrument_id, ticker, exchange, asset_type, currency, company_name,
+                   description, sector, industry, ipo_date, delist_date, status, is_tradable,
+                   created_at, updated_at
+            FROM instruments WHERE ticker = %s ORDER BY instrument_id LIMIT 1
+            """,
+            (ticker,),
+        )
+
+    row = cursor.fetchone()
+    if not row:
+        return None
+
+    return {
+        "instrument_id": row[0],
+        "ticker": row[1],
+        "exchange": row[2],
+        "asset_type": row[3],
+        "currency": row[4],
+        "company_name": row[5],
+        "description": row[6],
+        "sector": row[7],
+        "industry": row[8],
+        "ipo_date": row[9],
+        "delist_date": row[10],
+        "status": row[11],
+        "is_tradable": row[12],
+        "created_at": row[13],
+        "updated_at": row[14],
+    }
 
 
 def get_instrument_by_id(conn, instrument_id: int) -> Optional[Dict]:
@@ -174,7 +228,7 @@ def batch_insert_instruments(conn, instruments: List[Dict]):
         """,
             (
                 inst["ticker"],
-                inst.get("exchange", "US"),
+                inst.get("exchange", "UNKNOWN"),
                 inst.get("asset_type", "Stock"),
                 inst.get("currency", "USD"),
                 inst.get("company_name"),

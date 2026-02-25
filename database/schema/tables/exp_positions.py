@@ -14,8 +14,8 @@ def create_exp_positions_table(conn, if_exists="skip"):
     statement = """
         CREATE TABLE IF NOT EXISTS exp_positions (
             date DATE NOT NULL,
-            instrument_id BIGINT NOT NULL 
-                REFERENCES instruments(instrument_id) ON DELETE CASCADE,
+            instrument_id BIGINT NOT NULL,
+            -- 注意：不使用外键约束，因为 cash (id=0) 不在 instruments 表中
             
             quantity NUMERIC(20,8) NOT NULL,        -- 持仓数量（CASH 是数量）
             buy_price NUMERIC(20,6),                -- 买入价格（CASH 为1）
@@ -25,7 +25,8 @@ def create_exp_positions_table(conn, if_exists="skip"):
             PRIMARY KEY (date, instrument_id)
         );
         
-        COMMENT ON TABLE exp_positions IS '实验用持仓快照表（按日期记录）';
+        COMMENT ON TABLE exp_positions IS '实验用持仓快照表（按日期记录，instrument_id=0 表示现金）';
+        COMMENT ON COLUMN exp_positions.instrument_id IS '标的ID，0=现金占位符';
         COMMENT ON COLUMN exp_positions.market_value IS '该行对应资产的市值';
     """
 

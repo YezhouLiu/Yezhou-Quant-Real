@@ -1,8 +1,14 @@
 import numpy as np
 import pandas as pd
 import pytest
+from unittest.mock import MagicMock
 
-from engine.signals import FactorSpec, normalize_cross_section, pivot_factors_long_to_wide
+from engine.signals import (
+    FactorSpec, 
+    normalize_cross_section, 
+    pivot_factors_long_to_wide,
+    fetch_factors_long_for_date,
+)
 
 
 def test_pivot_factors_long_to_wide_basic():
@@ -84,3 +90,83 @@ def test_pivot_missing_columns_raises():
     df_long = pd.DataFrame({"instrument_id": [1], "value": [0.1]})
     with pytest.raises(KeyError):
         pivot_factors_long_to_wide(df_long)
+
+
+def test_fetch_factors_long_for_date_uses_rw_method(monkeypatch):
+    """测试 fetch_factors_long_for_date 使用 RW 方法"""
+    
+    def fake_get_factor_values(conn, **kwargs):
+        # 模拟返回 RW 方法的格式（含 factor_value 列）
+        return pd.DataFrame({
+            "instrument_id": [1, 2],
+            "date": ["2026-01-01", "2026-01-01"],
+            "factor_name": ["mom_21d", "mom_21d"],
+            "factor_value": [0.1, 0.2],
+            "factor_version": ["v1", "v1"],
+        })
+    
+    # patch RW 模块中的函数（因为 signals 里是 import 后调用）
+    monkeypatch.setattr(
+        "database.readwrite.rw_factor_values.get_factor_values",
+        fake_get_factor_values,
+    )
+    
+    conn = MagicMock()
+    df = fetch_factors_long_for_date(
+        conn,
+        asof_date="2026-01-01",
+        factor_names=["mom_21d"],
+        factor_version="v1",
+        universe_ids=[1, 2],
+    )
+    
+    # 验证返回的列名（应该是 value 而不是 factor_value）
+    assert "value" in df.columns
+    assert "factor_value" not in df.columns
+    assert list(df.columns) == ["instrument_id", "date", "factor_name", "value"]
+    assert len(df) == 2
+
+
+def test_fetch_factors_long_for_date_empty_result(monkeypatch):
+    """测试空结果返回正确的列结构"""
+    
+    def fake_get_factor_values(conn, **kwargs):
+        return pd.DataFrame()
+    
+    monkeypatch.setattr(
+        "database.readwrite.rw_factor_values.get_factor_values",
+        fake_get_factor_values,
+    )
+    
+    conn = MagicMock()
+    df = fetch_factors_long_for_date(
+        conn,
+        asof_date="2026-01-01",
+        factor_names=["mom_21d"],
+    )
+    
+    assert df.empty
+    assert list(df.columns) == ["instrument_id", "date", "factor_name", "value"]
+
+
+def test_fetch_factors_long_for_date_validates_inputs():
+    """测试输入验证"""
+    conn = MagicMock()
+    
+    # 空 factor_names
+    with pytest.raises(ValueError, match="cannot be empty"):
+        fetch_factors_long_for_date(
+            conn,
+            asof_date="2026-01-01",
+            factor_names=[],
+        )
+    
+    # 空 universe_ids
+    with pytest.raises(ValueError, match="universe_ids provided but empty"):
+        fetch_factors_long_for_date(
+            conn,
+            asof_date="2026-01-01",
+            factor_names=["mom_21d"],
+            universe_ids=[],
+        )
+

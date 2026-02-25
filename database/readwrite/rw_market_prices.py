@@ -6,14 +6,28 @@ from utils.logger import get_logger
 log = get_logger("rw_market_prices")
 
 
-def insert_price(conn, instrument_id: int, date: str, close_price: float, adj_close: float,
-                open_price: float = None, high_price: float = None, low_price: float = None,
-                volume: int = None, adj_open: float = None, adj_high: float = None,
-                adj_low: float = None, adj_volume: int = None, dividends: float = 0,
-                stock_splits: float = 1, data_source: str = 'tiingo'):
+def insert_price(
+    conn,
+    instrument_id: int,
+    date: str,
+    close_price: float,
+    adj_close: float,
+    open_price: float = None,
+    high_price: float = None,
+    low_price: float = None,
+    volume: int = None,
+    adj_open: float = None,
+    adj_high: float = None,
+    adj_low: float = None,
+    adj_volume: int = None,
+    dividends: float = 0,
+    stock_splits: float = 1,
+    data_source: str = "tiingo",
+):
     """插入单条价格数据"""
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(
+        """
         INSERT INTO market_prices (
             instrument_id, date, open_price, high_price, low_price, close_price, volume,
             adj_open, adj_high, adj_low, adj_close, adj_volume, dividends, stock_splits, data_source
@@ -33,16 +47,34 @@ def insert_price(conn, instrument_id: int, date: str, close_price: float, adj_cl
             dividends = EXCLUDED.dividends,
             stock_splits = EXCLUDED.stock_splits,
             ingested_at = now()
-    """, (instrument_id, date, open_price, high_price, low_price, close_price, volume,
-          adj_open, adj_high, adj_low, adj_close, adj_volume, dividends, stock_splits, data_source))
+    """,
+        (
+            instrument_id,
+            date,
+            open_price,
+            high_price,
+            low_price,
+            close_price,
+            volume,
+            adj_open,
+            adj_high,
+            adj_low,
+            adj_close,
+            adj_volume,
+            dividends,
+            stock_splits,
+            data_source,
+        ),
+    )
 
 
 def batch_insert_prices(conn, prices: List[Dict]):
     """批量插入价格数据"""
     cursor = conn.cursor()
-    
+
     for price in prices:
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO market_prices (
                 instrument_id, date, open_price, high_price, low_price, close_price, volume,
                 adj_open, adj_high, adj_low, adj_close, adj_volume, dividends, stock_splits, data_source
@@ -53,37 +85,49 @@ def batch_insert_prices(conn, prices: List[Dict]):
                 adj_close = EXCLUDED.adj_close,
                 volume = EXCLUDED.volume,
                 ingested_at = now()
-        """, (
-            price['instrument_id'], price['date'],
-            price.get('open_price'), price.get('high_price'), price.get('low_price'),
-            price['close_price'], price.get('volume'),
-            price.get('adj_open'), price.get('adj_high'), price.get('adj_low'),
-            price['adj_close'], price.get('adj_volume'),
-            price.get('dividends', 0), price.get('stock_splits', 1),
-            price.get('data_source', 'tiingo')
-        ))
-    
+        """,
+            (
+                price["instrument_id"],
+                price["date"],
+                price.get("open_price"),
+                price.get("high_price"),
+                price.get("low_price"),
+                price["close_price"],
+                price.get("volume"),
+                price.get("adj_open"),
+                price.get("adj_high"),
+                price.get("adj_low"),
+                price["adj_close"],
+                price.get("adj_volume"),
+                price.get("dividends", 0),
+                price.get("stock_splits", 1),
+                price.get("data_source", "tiingo"),
+            ),
+        )
+
     log.info(f"[✔] 批量插入 {len(prices)} 条价格数据")
 
 
-def get_prices(conn, instrument_id: int, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+def get_prices(
+    conn, instrument_id: int, start_date: str = None, end_date: str = None
+) -> pd.DataFrame:
     """获取价格数据"""
     query = "SELECT * FROM market_prices WHERE instrument_id = %s"
     params = [instrument_id]
-    
+
     if start_date:
         query += " AND date >= %s"
         params.append(start_date)
-    
+
     if end_date:
         query += " AND date <= %s"
         params.append(end_date)
-    
+
     query += " ORDER BY date"
-    
+
     cursor = conn.cursor()
     cursor.execute(query, params)
-    
+
     columns = [desc[0] for desc in cursor.description]
     return pd.DataFrame(cursor.fetchall(), columns=columns)
 
@@ -91,17 +135,20 @@ def get_prices(conn, instrument_id: int, start_date: str = None, end_date: str =
 def get_latest_price(conn, instrument_id: int) -> Optional[Dict]:
     """获取最新价格"""
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT * FROM market_prices
         WHERE instrument_id = %s
         ORDER BY date DESC
         LIMIT 1
-    """, (instrument_id,))
-    
+    """,
+        (instrument_id,),
+    )
+
     row = cursor.fetchone()
     if not row:
         return None
-    
+
     columns = [desc[0] for desc in cursor.description]
     return dict(zip(columns, row))
 
@@ -109,32 +156,85 @@ def get_latest_price(conn, instrument_id: int) -> Optional[Dict]:
 def get_price_on_date(conn, instrument_id: int, date: str) -> Optional[Dict]:
     """获取指定日期的价格"""
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT * FROM market_prices
         WHERE instrument_id = %s AND date = %s
-    """, (instrument_id, date))
-    
+    """,
+        (instrument_id, date),
+    )
+
     row = cursor.fetchone()
     if not row:
         return None
-    
+
     columns = [desc[0] for desc in cursor.description]
     return dict(zip(columns, row))
 
 
-def delete_prices(conn, instrument_id: int, start_date: str = None, end_date: str = None):
+def get_prices_on_date(conn, instrument_ids: List[int], date: str, strict: bool = False) -> Dict[int, float]:
+    """
+    批量获取指定日期的 adj_close
+    参数顺序与 get_price_on_date 保持一致：conn, instrument_id(s), date
+    
+    Parameters
+    ----------
+    strict : bool, default False
+        True: 所有标的必须有价格，否则抛出异常
+        False: 返回有价格的标的，缺失的会在日志中警告
+    """
+    from utils.logger import get_logger
+    log = get_logger("rw_market_prices")
+
+    if not instrument_ids:
+        return {}
+
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT instrument_id, adj_close
+        FROM market_prices
+        WHERE instrument_id = ANY(%s)
+          AND date = %s
+    """,
+        (instrument_ids, date),
+    )
+
+    rows = cursor.fetchall()
+
+    price_map = {row[0]: float(row[1]) for row in rows}
+
+    missing_ids = set(instrument_ids) - set(price_map.keys())
+    
+    if missing_ids:
+        if strict:
+            raise ValueError(
+                f"Missing price for instruments on {date}: {sorted(missing_ids)}"
+            )
+        else:
+            log.warning(
+                f"⚠️  Missing price for {len(missing_ids)} instruments on {date}: "
+                f"{sorted(list(missing_ids))[:10]}{'...' if len(missing_ids) > 10 else ''}"
+            )
+
+    return price_map
+
+
+def delete_prices(
+    conn, instrument_id: int, start_date: str = None, end_date: str = None
+):
     """删除价格数据"""
     query = "DELETE FROM market_prices WHERE instrument_id = %s"
     params = [instrument_id]
-    
+
     if start_date:
         query += " AND date >= %s"
         params.append(start_date)
-    
+
     if end_date:
         query += " AND date <= %s"
         params.append(end_date)
-    
+
     cursor = conn.cursor()
     cursor.execute(query, params)
     log.warning(f"[⚠] 删除价格数据: instrument_id={instrument_id}")

@@ -1,0 +1,12 @@
+ SELECT e.date,
+    e.instrument_id,
+        CASE
+            WHEN e.instrument_id = 0 THEN 'CASH'::text
+            ELSE i.ticker
+        END AS ticker,
+    e.quantity,
+    e.buy_price,
+    e.current_price,
+    e.market_value
+   FROM exp_positions e
+     LEFT JOIN instruments i ON e.instrument_id = i.instrument_id;

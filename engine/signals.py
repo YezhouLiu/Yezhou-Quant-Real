@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Iterable, Literal, Sequence
 
@@ -7,6 +8,8 @@ import pandas as pd
 import psycopg
 
 from engine.normalizer import rank_normalize, magnitude_normalize
+
+log = logging.getLogger(__name__)
 
 
 Method = Literal["rank", "mag"]
@@ -44,16 +47,44 @@ def normalize_cross_section(
 
     df_wide: 必须包含 instrument_id + 每个 factor_name 一列
     返回: instrument_id + 生成的信号列（原始因子列保留，方便 debug）
+    
+    注意：自动过滤掉任何因子数据缺失（NaN）的股票
     """
     if id_col not in df_wide.columns:
         raise KeyError(f"missing id_col: {id_col}")
 
     out = df_wide.copy()
-
+    
+    # 检查是否有数据
+    if len(out) == 0:
+        raise ValueError("df_wide is empty - no factor data available for this date")
+    
+    # 检查所有需要的因子列是否存在
+    missing_factors = []
     for spec in specs:
         if spec.factor_name not in out.columns:
-            raise KeyError(f"missing factor column in df_wide: {spec.factor_name}")
+            missing_factors.append(spec.factor_name)
+    
+    if missing_factors:
+        raise KeyError(f"missing factor columns in df_wide: {missing_factors}")
+    
+    if missing_factors:
+        raise KeyError(f"missing factor columns in df_wide: {missing_factors}")
+    
+    # 过滤掉任何因子有 NaN 的行（数据不全的股票）
+    factor_cols = [spec.factor_name for spec in specs]
+    before_count = len(out)
+    out = out.dropna(subset=factor_cols)
+    after_count = len(out)
 
+    if before_count > after_count:
+        dropped = before_count - after_count
+        log.debug(f"Filtered {dropped} instruments with incomplete factor data")
+
+    if len(out) == 0:
+        raise ValueError("All instruments have missing factor data")
+
+    for spec in specs:
         for m in spec.methods:
             if m == "rank":
                 out[f"{spec.factor_name}_rank"] = rank_normalize(
@@ -82,44 +113,37 @@ def fetch_factors_long_for_date(
     factor_names: Sequence[str],
     factor_version: str | None = None,
     universe_ids: Sequence[int] | None = None,
-    table: str = "factor_values",
 ) -> pd.DataFrame:
     """
     从 DB 读某一天的因子长表。
 
-    假设表结构至少包含：
-      instrument_id, date, factor_name, value
-    并可选包含 factor_version
+    返回: DataFrame with columns [instrument_id, date, factor_name, factor_value]
     """
+    from database.readwrite.rw_factor_values import get_factor_values
+    
     if len(factor_names) == 0:
         raise ValueError("factor_names cannot be empty")
 
-    where = ["date = %(asof_date)s", "factor_name = ANY(%(factor_names)s)"]
-    params = {"asof_date": asof_date, "factor_names": list(factor_names)}
+    if universe_ids is not None and len(universe_ids) == 0:
+        raise ValueError("universe_ids provided but empty")
 
-    if factor_version is not None:
-        where.append("factor_version = %(factor_version)s")
-        params["factor_version"] = factor_version
+    df = get_factor_values(
+        conn,
+        factor_names=list(factor_names),
+        factor_version=factor_version,
+        instrument_ids=list(universe_ids) if universe_ids else None,
+        date=asof_date,
+    )
 
-    if universe_ids is not None:
-        # 强制上游传入正确 universe（否则报错）
-        if len(universe_ids) == 0:
-            raise ValueError("universe_ids provided but empty")
-        where.append("instrument_id = ANY(%(universe_ids)s)")
-        params["universe_ids"] = list(universe_ids)
-
-    sql = f"""
-        SELECT instrument_id, date, factor_name, value
-        FROM {table}
-        WHERE {" AND ".join(where)}
-    """
-
-    with conn.cursor() as cur:
-        cur.execute(sql, params)
-        rows = cur.fetchall()
-
-    # rows: list[tuple]
-    return pd.DataFrame(rows, columns=["instrument_id", "date", "factor_name", "value"])
+    # RW 返回的列名是 factor_value，需要重命名为 value 以保持兼容
+    if df.empty:
+        return pd.DataFrame(columns=["instrument_id", "date", "factor_name", "value"])
+    
+    # 只保留需要的列并重命名
+    df = df[["instrument_id", "date", "factor_name", "factor_value"]].copy()
+    df.rename(columns={"factor_value": "value"}, inplace=True)
+    
+    return df
 
 
 def pivot_factors_long_to_wide(
@@ -135,6 +159,10 @@ def pivot_factors_long_to_wide(
     for c in (id_col, factor_col, value_col):
         if c not in df_long.columns:
             raise KeyError(f"missing column in df_long: {c}")
+
+    if df_long.empty:
+        # 返回空 DataFrame，但保留 instrument_id 列
+        return pd.DataFrame(columns=[id_col])
 
     df_wide = (
         df_long.pivot(index=id_col, columns=factor_col, values=value_col)
@@ -153,7 +181,6 @@ def build_signals_for_date(
     specs: Sequence[FactorSpec],
     factor_version: str | None = None,
     universe_ids: Sequence[int] | None = None,
-    table: str = "factor_values",
 ) -> pd.DataFrame:
     """
     一步到位：
@@ -167,7 +194,6 @@ def build_signals_for_date(
         factor_names=factor_names,
         factor_version=factor_version,
         universe_ids=universe_ids,
-        table=table,
     )
 
     df_wide = pivot_factors_long_to_wide(df_long)

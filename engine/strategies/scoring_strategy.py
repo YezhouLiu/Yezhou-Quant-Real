@@ -23,7 +23,6 @@ class ScoringStrategy:
     factor_specs: tuple[FactorSpec, ...]
     scorer: Scorer
     factor_version: str | None = None
-    table: str = "factor_values"
 
     def score_for_date(
         self,
@@ -41,7 +40,6 @@ class ScoringStrategy:
             specs=self.factor_specs,
             factor_version=self.factor_version,
             universe_ids=universe_ids,
-            table=self.table,
         )
 
         return self.scorer.score(signals)
@@ -65,5 +63,4 @@ class ScoringStrategy:
             specs=self.factor_specs,
             factor_version=self.factor_version,
             universe_ids=universe_ids,
-            table=self.table,
         )
