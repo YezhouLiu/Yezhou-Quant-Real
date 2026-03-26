@@ -1,3 +1,16 @@
+# =============================================================================
+# Yezhou Capital Limited  |  Proprietary & Confidential
+# =============================================================================
+# Copyright (c) 2026 Yezhou Capital Limited. All rights reserved.
+#
+# Project  : Yezhou Quantitative Trading System
+# Author   : Yezhou Liu
+# Contact  : yezhoucapital@gmail.com
+#
+# This source code is the exclusive property of Yezhou Capital Limited.
+# Unauthorized copying, modification, distribution, or use of this file,
+# via any medium, is strictly prohibited without prior written consent.
+# =============================================================================
 """
 测试 rw_positions.py - 持仓记录 CRUD 操作
 使用 Mock 避免影响真实数据库

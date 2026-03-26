@@ -1,15 +1,18 @@
 # Yezhou 量化交易系统
 
+> © 2026 Yezhou Capital Limited. All rights reserved.
+
 ## 📋 项目概述
 
 这是一个基于 PostgreSQL 的美股量化交易系统，用于因子研究、策略回测和实盘交易。系统设计遵循模块化原则，支持多因子模型开发和日线级别的股票筛选。
 
 **核心功能**：
 - 美股标的池管理（S&P 500、NASDAQ 100等）
-- Tiingo EOD价格数据下载与存储
+- Tiingo EOD 价格数据下载与存储
 - 因子计算引擎（动量、波动率、跳空风险、最大回撤、美元成交量等）
 - 交易日历与企业行为处理
-- 回测与实盘持仓管理
+- **回测引擎**：完整的 Strategy → Scorer → Selector → Portfolio → BacktestRunner 流水线
+- **可视化模块**：NAV 对比图（组合 vs 基准 tickers）
 
 ---
 
@@ -18,19 +21,21 @@
 ```
 Yezhou-Quant-Real/
 │
-├── main.py                      # 主入口：daily_update() 日常任务
+├── main.py                      # 主入口：daily_update() / run_backtest() / compare_portfolio_with_tickers()
 ├── config/
 │   └── config.yaml              # 全局配置（数据库、交易参数、日志）
 │
 ├── database/                    # 数据库层 ⭐ 核心
 │   ├── schema/                  # 表结构定义
 │   │   ├── create_tables.py     # 一键建表脚本
-│   │   └── tables/              # 各表DDL（11张表）
+│   │   └── tables/              # 各表DDL（13张表）
 │   ├── readwrite/               # RW方法（数据存取接口）
-│   │   ├── rw_instruments.py    # 资产主表
-│   │   ├── rw_market_prices.py  # 价格数据
-│   │   ├── rw_factor_values.py  # 因子值
-│   │   └── ...                  # 其他表的RW方法
+│   │   ├── rw_instruments.py           # 资产主表
+│   │   ├── rw_market_prices.py         # 价格数据
+│   │   ├── rw_factor_values.py         # 因子值
+│   │   ├── rw_exp_positions.py         # 实验持仓（回测结果）⭐ 新增
+│   │   ├── rw_fundamental_daily.py     # 每日基本面/估值数据 ⭐ 新增
+│   │   └── ...                         # 其他表的RW方法
 │   └── utils/
 │       └── db_utils.py          # 数据库连接工具
 │
@@ -40,7 +45,7 @@ Yezhou-Quant-Real/
 │   │   ├── all_us_stocks.py     # 全市场股票列表
 │   │   └── ...
 │   └── update/                  # 增量更新
-│       ├── update_tradable_universe.py  # 每日更新标的池
+│       ├── update_tradable_universe.py        # 每日更新标的池
 │       └── fill_sector_industry_yfinance.py
 │
 ├── factors/                     # 因子定义库
@@ -51,23 +56,51 @@ Yezhou-Quant-Real/
 │   ├── jump_risk.py             # 跳空风险因子
 │   └── max_drawdown.py          # 最大回撤因子
 │
-├── engine/                      # 计算引擎
-│   └── compute_factors/
-│       ├── compute_momentum.py  # 因子批量计算入口
-│       ├── compute_volatility.py
-│       ├── compute_volatility_of_volatility.py
-│       ├── compute_dollar_volume.py
-│       ├── compute_jump_risk.py
-│       └── compute_max_drawdown.py
+├── engine/                      # 计算引擎 ⭐ 大幅扩展
+│   ├── constants.py             # 全局常量（CASH_INSTRUMENT_ID = 0）
+│   ├── normalizer.py            # 因子标准化工具（rank / magnitude）
+│   ├── signals.py               # FactorSpec + 横截面信号构建
+│   ├── portfolio.py             # Portfolio 持仓与调仓逻辑
+│   ├── backtest_runner.py       # BacktestRunner 回测主循环
+│   ├── compute_factors/         # 因子批量计算脚本
+│   │   ├── compute_all_factors.py         # 一键计算全部因子 ⭐ 新增
+│   │   ├── compute_momentum.py
+│   │   ├── compute_volatility.py
+│   │   ├── compute_volatility_of_volatility.py
+│   │   ├── compute_dollar_volume.py
+│   │   ├── compute_jump_risk.py
+│   │   └── compute_max_drawdown.py
+│   ├── scorers/                 # 打分器 ⭐ 新增
+│   │   ├── base.py              # 抽象接口 Scorer / ScoreResult
+│   │   └── linear.py            # LinearScorer（加权求和）
+│   ├── selectors/               # 选股器 ⭐ 新增
+│   │   ├── base.py              # 抽象接口 Selector / SelectionResult
+│   │   ├── topk.py              # TopKSelector（排序取前K）
+│   │   └── rules.py             # 规则过滤器
+│   └── strategies/              # 策略 ⭐ 新增
+│       └── scoring_strategy.py  # ScoringStrategy（DB → signals → score）
 │
 ├── tasks/                       # 定时任务
 │   ├── daily_tasks.py           # 每日：下载价格、更新标的、提取企业行为
+│   ├── backtest_tasks.py        # 回测任务：run_backtest() ⭐ 新增
 │   ├── seasonal_tasks.py        # 季度：基本面数据
 │   └── annual_tasks.py          # 年度：深度清洗
+│
+├── ui/                          # 可视化模块 ⭐ 新增
+│   ├── api.py                   # compare_portfolio_with_tickers()
+│   ├── data_sources/
+│   │   ├── portfolio_nav.py     # 从 exp_positions 读取组合 NAV
+│   │   └── ticker_nav.py        # 从 market_prices 读取单标的 NAV
+│   ├── transforms/
+│   │   ├── align.py             # 多序列时间对齐
+│   │   └── normalize.py         # NAV 标准化（起始=1）
+│   └── plots/
+│       └── nav_plot.py          # NAV 对比折线图（matplotlib）
 │
 ├── tests/                       # 单元测试
 │   ├── database/                # 数据库RW方法测试
 │   ├── factors/                 # 因子计算测试
+│   ├── engine/                  # 回测引擎测试
 │   └── ...
 │
 └── utils/                       # 工具函数
@@ -80,7 +113,7 @@ Yezhou-Quant-Real/
 
 ## �️ 数据库架构
 
-### 数据表总览（11张表）
+### 数据表总览（13张表）
 
 系统采用 PostgreSQL 作为核心数据库，所有表通过 `instrument_id` 作为统一外键关联。
 
@@ -89,19 +122,21 @@ Yezhou-Quant-Real/
 2. **instrument_identifiers** - 跨数据源映射表
 3. **market_prices** - 市场价格数据（OHLCV + 复权）
 4. **corporate_actions** - 企业行为（分红、拆股）
-5. **fundamental_data** - 基本面数据（预留）
+5. **fundamental_data** - 基本面数据（SEC EDGAR，按报告期存储）
+6. **fundamental_daily** - 每日基本面/估值数据（PE/PB 等，⭐ 新增）
 
 #### 因子与回测表
-6. **factor_values** - 因子值表
-7. **trading_calendar** - 交易日历表
+7. **factor_values** - 因子值表
+8. **trading_calendar** - 交易日历表
 
 #### 交易与持仓表
-8. **fills** - 成交记录表
-9. **positions** - 持仓快照表
+9. **fills** - 成交记录表
+10. **positions** - 实盘持仓快照表
+11. **exp_positions** - 实验/回测持仓快照表（⭐ 新增，`instrument_id=0` 表示现金）
 
 #### 系统管理表
-10. **system_state** - 系统状态/配置表
-11. **data_update_logs** - 数据更新日志表
+12. **system_state** - 系统状态/配置表
+13. **data_update_logs** - 数据更新日志表
 
 **标的池管理**：系统使用 `instruments.is_tradable` 字段直接标记可交易资产，通过 `update_tradable_universe()` 基于市场数据（价格、成交量）动态更新。初始候选池通过 CSV 文件管理（`csv/tradable_candidates.csv`），支持从 Russell 1000/2000、S&P 500 等指数爬取。
 
@@ -263,7 +298,7 @@ CREATE TABLE corporate_actions (
 
 #### 5. fundamental_data（基本面数据表）
 
-**用途**：存储 SEC EDGAR 基本面数据（预留，暂未使用）
+**用途**：存储 SEC EDGAR 基本面数据（按报告期，如季报/年报）
 
 **表结构**：
 ```sql
@@ -295,7 +330,34 @@ CREATE TABLE fundamental_data (
 
 ---
 
-#### 6. factor_values（因子值表）
+#### 6. fundamental_daily（每日基本面/估值表）⭐ 新增
+
+**用途**：存储按日期变化的基本面/估值指标（PE、PB、市值等），供因子计算和选股使用
+
+**表结构**：
+```sql
+CREATE TABLE fundamental_daily (
+    instrument_id BIGINT NOT NULL REFERENCES instruments(instrument_id) ON DELETE CASCADE,
+    date DATE NOT NULL,
+    metric_name TEXT NOT NULL,                    -- pe_ratio/pb_ratio/market_cap/...
+    
+    metric_value NUMERIC(38,10),
+    currency TEXT DEFAULT 'USD',
+    data_source TEXT,
+    ingested_at TIMESTAMPTZ DEFAULT now(),
+    
+    PRIMARY KEY (instrument_id, date, metric_name)
+);
+```
+
+**I/O 方法**（`database/readwrite/rw_fundamental_daily.py`）：
+- `insert_fundamental_daily(conn, instrument_id, metric_name, value, date, ...)`
+- `batch_insert_fundamental_daily(conn, records: List[Dict])`
+- `get_fundamental_daily(conn, instrument_id, metric_name, start_date, end_date)` → pd.DataFrame
+
+---
+
+#### 7. factor_values（因子值表）
 
 **用途**：存储所有因子的计算结果（动量、波动率、美元成交量、跳空风险等）
 
@@ -335,7 +397,7 @@ CREATE TABLE factor_values (
 
 ---
 
-#### 7. trading_calendar（交易日历表）
+#### 8. trading_calendar（交易日历表）
 
 **用途**：记录美股交易日历，标记交易日和节假日
 
@@ -364,7 +426,7 @@ CREATE TABLE trading_calendar (
 
 ---
 
-#### 8. fills（成交记录表）
+#### 9. fills（成交记录表）
 
 **用途**：记录所有买卖成交记录
 
@@ -401,7 +463,7 @@ CREATE TABLE fills (
 
 ---
 
-#### 9. positions（持仓快照表）
+#### 10. positions（持仓快照表）
 
 **用途**：记录每日持仓快照
 
@@ -435,7 +497,36 @@ CREATE TABLE positions (
 
 ---
 
-#### 10. system_state（系统状态表）
+#### 11. exp_positions（实验/回测持仓表）⭐ 新增
+
+**用途**：存储回测或策略实验的每日持仓快照，与实盘 `positions` 表隔离。`instrument_id = 0` 表示现金（不依赖 instruments 外键）
+
+**表结构**：
+```sql
+CREATE TABLE exp_positions (
+    date DATE NOT NULL,
+    instrument_id BIGINT NOT NULL,
+    -- 注意：不使用外键约束，因为 cash (id=0) 不在 instruments 表中
+    
+    quantity NUMERIC(20,8) NOT NULL,        -- 持仓数量（CASH 是金额）
+    buy_price NUMERIC(20,6),                -- 买入价格（CASH 为 1）
+    current_price NUMERIC(20,6),            -- 当前价格（CASH 为 1）
+    market_value NUMERIC(20,6) NOT NULL,    -- 市值（quantity * current_price）
+    
+    PRIMARY KEY (date, instrument_id)
+);
+```
+
+**I/O 方法**（`database/readwrite/rw_exp_positions.py`）：
+- `insert_exp_position(conn, date, instrument_id, quantity, buy_price, current_price, market_value)`
+- `batch_insert_exp_positions(conn, rows: List[Dict])`
+- `get_exp_positions(conn, date)` → pd.DataFrame
+- `get_exp_position_history(conn, instrument_id, start_date, end_date)` → pd.DataFrame
+- `delete_exp_positions_by_date(conn, date)`
+
+---
+
+#### 12. system_state（系统状态表）
 
 **用途**：存储系统配置和状态（现金资产 ID、最后更新时间等）
 
@@ -460,7 +551,7 @@ CREATE TABLE system_state (
 
 ---
 
-#### 11. data_update_logs（数据更新日志表）
+#### 13. data_update_logs（数据更新日志表）
 
 **用途**：监控数据更新任务的执行情况（Tiingo API 调用、因子计算等）
 
@@ -498,7 +589,7 @@ CREATE TABLE data_update_logs (
 
 ---
 
-## �🔄 业务逻辑
+## 🔄 业务逻辑
 
 ### 1. 数据流水线
 
@@ -520,8 +611,15 @@ CREATE TABLE data_update_logs (
 │ factor_values   │ 因子计算结果（动量、波动率、美元成交量、跳空风险等）
 └────────┬────────┘
          ↓
+┌──────────────────────────────────────┐
+│  回测引擎（BacktestRunner）           │
+│  ScoringStrategy → LinearScorer      │
+│  → TopKSelector → Portfolio          │
+│  → exp_positions（按日写入）         │
+└────────┬─────────────────────────────┘
+         ↓
 ┌─────────────────┐
-│ 选股/回测       │ 根据因子排序选股 → positions
+│  UI 可视化      │ NAV 对比图（组合 vs SPY / 个股）
 └─────────────────┘
 ```
 
@@ -551,9 +649,93 @@ calc_single_instrument_momentum(
 
 ---
 
-### 4. 已实现因子库 📊
+### 4. 回测引擎架构 ⭐
 
-#### 4.1 动量因子（Momentum）
+回测引擎采用分层设计，各层职责单一，方便替换和扩展：
+
+```
+FactorSpec（因子方向声明）
+    ↓
+ScoringStrategy（DB 查询 + 横截面标准化 → 信号矩阵）
+    ↓
+LinearScorer（加权求和 → 综合评分）
+    ↓
+TopKSelector（过滤 + 排序 → 选出 Top-K 标的）
+    ↓
+Portfolio（持仓 + rebalance + 成本计算）
+    ↓
+BacktestRunner（按调仓日循环 → 写入 exp_positions）
+```
+
+**使用示例**（见 `tasks/backtest_tasks.py`）：
+
+```python
+from engine.signals import FactorSpec
+from engine.scorers.linear import LinearScorer, LinearTerm
+from engine.strategies.scoring_strategy import ScoringStrategy
+from engine.selectors.topk import TopKSelector
+from engine.backtest_runner import BacktestRunner
+
+specs = (
+    FactorSpec(factor_name="mom_63d",        ascending=True,  methods=("rank",)),
+    FactorSpec(factor_name="vol_60d_ann252", ascending=False, methods=("rank",)),
+    FactorSpec(factor_name="mdd_252d",       ascending=False, methods=("rank",)),
+)
+
+scorer = LinearScorer(terms=(
+    LinearTerm("mom_63d_rank",        0.5),
+    LinearTerm("vol_60d_ann252_rank", 0.3),
+    LinearTerm("mdd_252d_rank",       0.2),
+))
+
+strategy = ScoringStrategy(factor_specs=specs, scorer=scorer, factor_version="v1")
+selector = TopKSelector(k=20, sort_by="_score", sort_ascending=False)
+
+runner = BacktestRunner(
+    strategy=strategy, selector=selector,
+    initial_cash=100_000,
+    slippage=0.005, transaction_cost=0.001, exchange_cost=0.0005,
+    reinvest_ratio=0.98,
+    universe_provider=lambda conn, date: None,
+    rebalance_day="last",   # 'last' | 'first' | 1~28
+)
+runner.run(conn, start_date="2020-01-01", end_date="2025-12-31")
+```
+
+**BacktestRunner 调仓日选项**：
+
+| `rebalance_day` | 含义 |
+|---|---|
+| `"last"` | 每月最后一个交易日（默认） |
+| `"first"` | 每月第一个交易日 |
+| `1` ~ `28` | 每月第 N 自然日（非交易日顺延） |
+
+---
+
+### 5. UI 可视化模块 ⭐
+
+从 `exp_positions` 读取回测 NAV，与若干 ticker 基准对比，绘制归一化收益曲线：
+
+```python
+from ui.api import compare_portfolio_with_tickers
+
+compare_portfolio_with_tickers(
+    tickers=["SPY", "QQQ", "MSFT", "NVDA"],
+    start_date="2020-01-01",
+)
+```
+
+流程：
+1. `PortfolioNAVSource` → 从 `exp_positions` 汇总每日 NAV
+2. `TickerNAVSource` → 从 `market_prices` 读取单标的收盘价
+3. `align_series()` → 对齐时间序列（裁剪到共同起止日）
+4. `plot_nav()` → 归一化到起始点=1，绘制折线图
+
+---
+
+### 6. 已实现因子库 📊
+
+#### 6.1 动量因子（Momentum）
 - **文件**：`factors/momentum.py`
 - **因子名称**：`mom_{lookback}d_skip{skip}`
 - **计算公式**：`(price_t-skip / price_t-skip-lookback) - 1`
@@ -561,7 +743,7 @@ calc_single_instrument_momentum(
 - **理论依据**：动量效应（Jegadeesh & Titman, 1993）
 - **适用场景**：捕捉中期趋势，跳过近期反转
 
-#### 4.2 波动率因子（Volatility）
+#### 6.2 波动率因子（Volatility）
 - **文件**：`factors/volatility.py`
 - **因子名称**：`vol_{window}d_ann{annualize}`
 - **计算公式**：`std(daily_returns) * sqrt(annualize)`
@@ -569,7 +751,7 @@ calc_single_instrument_momentum(
 - **理论依据**：低波动异象（Low-Volatility Anomaly）
 - **适用场景**：风险调整、防守性策略
 
-#### 4.3 波动率的波动率（Volatility of Volatility）
+#### 6.3 波动率的波动率（Volatility of Volatility）
 - **文件**：`factors/volatility_of_volatility.py`
 - **因子名称**：`volvol_{volvol_window}d_from_vol{vol_window}d`
 - **计算公式**：先计算滚动波动率序列，再计算波动率的标准差
@@ -577,7 +759,7 @@ calc_single_instrument_momentum(
 - **理论依据**：波动率风险溢价
 - **适用场景**：识别不稳定、高风险资产
 
-#### 4.4 美元成交量因子（Dollar Volume）
+#### 6.4 美元成交量因子（Dollar Volume）
 - **文件**：`factors/dollar_volume.py`
 - **因子名称**：`dv_{window}d_log`
 - **计算公式**：`log(mean(adj_close * adj_volume))`
@@ -585,7 +767,7 @@ calc_single_instrument_momentum(
 - **理论依据**：流动性溢价
 - **适用场景**：过滤流动性不足的小盘股
 
-#### 4.5 跳空风险因子（Jump Risk）
+#### 6.5 跳空风险因子（Jump Risk）
 - **文件**：`factors/jump_risk.py`
 - **因子名称**：`jump_{window}d_max`, `jump_{window}d_cnt`
 - **计算公式**：
@@ -595,7 +777,7 @@ calc_single_instrument_momentum(
 - **理论依据**：跳空风险（Tail Risk）
 - **适用场景**：风险管理、事件驱动策略
 
-#### 4.6 最大回撤因子（Maximum Drawdown）
+#### 6.6 最大回撤因子（Maximum Drawdown）
 - **文件**：`factors/max_drawdown.py`
 - **因子名称**：`mdd_{window}d`
 - **计算公式**：`(running_max - current_price) / running_max` 的最大值
@@ -848,23 +1030,26 @@ python main.py
 ## 📝 TODO / 下一步计划
 
 - [x] 添加更多因子（波动率、成交量、反转、跳空风险、最大回撤）✅
-- [ ] 实现因子合成（线性加权、机器学习）
-- [ ] 回测引擎优化（支持多空策略）
-- [ ] 实盘交易接口（Interactive Brokers）
-- [ ] 风险管理模块（VaR、最大回撤限制）
-- [ ] 可视化面板（因子IC、持仓分布、收益曲线）
-- [ ] 因子有效性分析（IC、分组回测、因子相关性）
-- [ ] 风险管理模块（VaR、最大回撤限制）
-- [ ] 可视化面板（因子IC、持仓分布、收益曲线）
+- [x] 回测引擎（BacktestRunner + Portfolio + ScoringStrategy）✅
+- [x] 可视化面板（NAV 对比图 - portfolio vs tickers）✅
+- [ ] **因子合成**：多因子线性加权以外的方法（IC 加权、机器学习）
+- [ ] **因子有效性分析**：IC 时序、分组回测（quintile）、因子相关性矩阵
+- [ ] **多空策略**：支持做空，净值曲线分开统计 Long / Short / L/S
+- [ ] **风险管理模块**：VaR、最大回撤硬限制、波动率目标仓位
+- [ ] **实盘交易接口**：Interactive Brokers IBKR API 对接
+- [ ] **基本面因子**：接入 fundamental_daily 表（PE/PB/市值加权）
+- [ ] **调仓频率优化**：周频 / 双周频调仓支持
+- [ ] **交易成本建模优化**：市场冲击成本、流动性约束
 
 ---
 
 ## 📞 联系方式
 
+- **公司**：Yezhou Capital Limited
 - **作者**：Yezhou Liu
-- **邮箱**：YezhouLiu7@gmail.com
+- **邮箱**：yezhoucapital@gmail.com
 - **数据库**：PostgreSQL @ localhost:5432/quant
 
 ---
 
-**最后更新**：2026-02-08
+**最后更新**：2026-03-26

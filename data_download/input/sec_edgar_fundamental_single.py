@@ -1,3 +1,16 @@
+# =============================================================================
+# Yezhou Capital Limited  |  Proprietary & Confidential
+# =============================================================================
+# Copyright (c) 2026 Yezhou Capital Limited. All rights reserved.
+#
+# Project  : Yezhou Quantitative Trading System
+# Author   : Yezhou Liu
+# Contact  : yezhoucapital@gmail.com
+#
+# This source code is the exclusive property of Yezhou Capital Limited.
+# Unauthorized copying, modification, distribution, or use of this file,
+# via any medium, is strictly prohibited without prior written consent.
+# =============================================================================
 import sys
 from pathlib import Path
 
@@ -16,7 +29,7 @@ log = get_logger("fundamentals_downloader")
 # =============================================================================
 # SEC headers（必须真实，避免 ban）
 # =============================================================================
-SEC_USER_AGENT = "YezhouResearch/1.0 (contact: yezhouliu7@gmail.com)"
+SEC_USER_AGENT = "YezhouResearch/1.0 (contact: yezhoucapital@gmail.com)"
 
 SEC_HEADERS_DATA = {
     "User-Agent": SEC_USER_AGENT,
