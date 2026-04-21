@@ -34,7 +34,7 @@ path:
   csv_dir: csv
 
 price:
-  price_floor: 1.5
+  price_floor: 5.0
   price_ceiling: 10000.0
   jump_threshold: 0.95
   jump_ratio_limit: 10.0

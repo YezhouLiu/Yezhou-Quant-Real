@@ -13,6 +13,7 @@
 # =============================================================================
 from database.readwrite.rw_market_prices import get_price_max_date
 from database.utils.db_utils import get_db_connection
+from utils.config_values import DEFAULT_PRICE_FLOOR
 from utils.logger import get_logger
 
 log = get_logger("update_tradable_universe")
@@ -20,7 +21,7 @@ log = get_logger("update_tradable_universe")
 
 def update_tradable_universe(
     *,
-    min_price: float = 5.0,
+    min_price: float = None,
     min_avg_dollar_volume: float = 1_000_000,
     lookback_days: int = 60,
 ):
@@ -36,6 +37,9 @@ def update_tradable_universe(
 
     不做容错，缺数据直接炸。
     """
+
+    if min_price is None:
+        min_price = DEFAULT_PRICE_FLOOR()
 
     conn = get_db_connection()
     cursor = conn.cursor()
