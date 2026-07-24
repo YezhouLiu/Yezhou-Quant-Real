@@ -2,7 +2,8 @@
 
 **Feature Branch**: `003-factor-computation`  
 **Created**: 2026-04-21  
-**Status**: ✅ Implemented（6 个技术因子全部可运行）  
+**Last Updated**: 2026-07-24（新增 3 个情报因子：mom_1d / vol_ratio_20d / decline_streak）  
+**Status**: ✅ Implemented（9 个技术因子全部可运行）  
 **Input**: 从 market_prices 表读取价格序列，输出到 factor_values 表
 
 ---
@@ -70,7 +71,7 @@
 
 ### Functional Requirements
 
-- **FR-001**: 系统 MUST 支持以下 6 个技术因子：动量、波动率、美元成交量、最大回撤、波动率之波动率、跳跃风险
+- **FR-001**: 系统 MUST 支持以下 9 个技术因子：动量（含单日收益率）、波动率、美元成交量、最大回撤、波动率之波动率、跳跃风险、量比、连续下跌天数
 - **FR-002**: 每个因子 MUST 接受 `start_date`, `end_date` 参数，并从 DB 独立加载所需价格
 - **FR-003**: 因子计算 MUST 自动加载 `buffer_days`（用于滚动窗口的预热期），窗口外的结果不写入
 - **FR-004**: 因子写入 MUST 携带 `factor_version`（基于参数确定性生成）和 `factor_args`（JSONB 格式）
@@ -88,14 +89,18 @@
 
 ## Factor Reference
 
-| 因子名 | 公式 | 参数 | 方向 |
-|--------|------|------|------|
-| `mom_{lookback}d_skip{skip}` | price[t-skip] / price[t-skip-lookback] - 1 | lookback, skip | ascending（高动量=好）|
-| `vol_{window}d_ann{ann}` | rolling_std(log_returns) × √ann | window, annualize | descending（低波动=好）|
-| `dv_{window}d_log` | log(rolling_mean(adj_close × adj_volume)) | window | ascending（高流动=好）|
-| `mdd_{window}d` | rolling_min(price/rolling_max - 1) | window | descending（低回撤=好）|
-| `vol_of_vol_*` | std(rolling_vol) | - | descending |
-| `jump_risk_*` | gap risk metric | - | descending |
+| 因子名 | 公式 | 参数 | 方向 | 文件 |
+|--------|------|------|------|------|
+| `mom_{lookback}d` / `mom_{lookback}d_skip{skip}` | price[t-skip] / price[t-skip-lookback] - 1 | lookback, skip | ascending | `factors/momentum.py` |
+| `vol_{window}d_ann{ann}` | rolling_std(log_returns) × √ann | window, annualize | descending | `factors/volatility.py` |
+| `dv_{window}d_log` | log(rolling_mean(adj_close × adj_volume)) | window | ascending | `factors/dollar_volume.py` |
+| `mdd_{window}d` | rolling_min(price/rolling_max - 1) | window | descending | `factors/max_drawdown.py` |
+| `volvol_*` | std(rolling_vol) | - | descending | `factors/volatility_of_volatility.py` |
+| `jump_risk_*` | gap risk metric | - | descending | `factors/jump_risk.py` |
+| `vol_ratio_{window}d` ✅ | adj_volume[t] / mean(adj_volume[t-window:t-1]) | window=20 | — | `factors/volume_ratio.py` |
+| `decline_streak` ✅ | consecutive days where adj_close < prev adj_close | — | — | `factors/decline_streak.py` |
+
+> ✅ = 2026-07-24 新增。`vol_ratio_20d` 和 `decline_streak` 是情报因子，不用于回测信号归一化（方向标记为 —）。
 
 ---
 

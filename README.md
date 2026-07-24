@@ -9,9 +9,10 @@
 **核心功能**：
 - 美股标的池管理（S&P 500、NASDAQ 100等）
 - Tiingo EOD 价格数据下载与存储
-- 因子计算引擎（动量、波动率、跳空风险、最大回撤、美元成交量等）
+- 因子计算引擎（9 个技术因子：动量、波动率、跳空风险、最大回撤、美元成交量、量比、连续下跌等）
 - 交易日历与企业行为处理
 - **回测引擎**：完整的 Strategy → Scorer → Selector → Portfolio → BacktestRunner 流水线
+- **每日市场情报简报**：自动生成涨跌榜、量突变、连跌预警、板块汇总
 - **可视化模块**：NAV 对比图（组合 vs 基准 tickers）
 
 ---
@@ -49,12 +50,14 @@ Yezhou-Quant-Real/
 │       └── fill_sector_industry_yfinance.py
 │
 ├── factors/                     # 因子定义库
-│   ├── momentum.py              # 动量因子计算
+│   ├── momentum.py              # 动量因子（含 mom_1d 单日收益率）
 │   ├── volatility.py            # 波动率因子
 │   ├── volatility_of_volatility.py  # 波动率的波动率
 │   ├── dollar_volume.py         # 美元成交量因子
 │   ├── jump_risk.py             # 跳空风险因子
-│   └── max_drawdown.py          # 最大回撤因子
+│   ├── max_drawdown.py          # 最大回撤因子
+│   ├── volume_ratio.py          # ⭐ 量比因子（vol_ratio_20d）
+│   └── decline_streak.py        # ⭐ 连续下跌计数因子（decline_streak）
 │
 ├── engine/                      # 计算引擎 ⭐ 大幅扩展
 │   ├── constants.py             # 全局常量（CASH_INSTRUMENT_ID = 0）
@@ -63,13 +66,15 @@ Yezhou-Quant-Real/
 │   ├── portfolio.py             # Portfolio 持仓与调仓逻辑
 │   ├── backtest_runner.py       # BacktestRunner 回测主循环
 │   ├── compute_factors/         # 因子批量计算脚本
-│   │   ├── compute_all_factors.py         # 一键计算全部因子 ⭐ 新增
+│   │   ├── compute_all_factors.py         # 一键计算全部因子（9 个）
 │   │   ├── compute_momentum.py
 │   │   ├── compute_volatility.py
 │   │   ├── compute_volatility_of_volatility.py
 │   │   ├── compute_dollar_volume.py
 │   │   ├── compute_jump_risk.py
-│   │   └── compute_max_drawdown.py
+│   │   ├── compute_max_drawdown.py
+│   │   ├── compute_volume_ratio.py        # ⭐ 量比因子 runner
+│   │   └── compute_decline_streak.py      # ⭐ 连续下跌因子 runner
 │   ├── scorers/                 # 打分器 ⭐ 新增
 │   │   ├── base.py              # 抽象接口 Scorer / ScoreResult
 │   │   └── linear.py            # LinearScorer（加权求和）
@@ -80,8 +85,11 @@ Yezhou-Quant-Real/
 │   └── strategies/              # 策略 ⭐ 新增
 │       └── scoring_strategy.py  # ScoringStrategy（DB → signals → score）
 │
+├── reports/                     # ⭐ 每日市场情报简报模块
+│   └── daily_briefing.py        # generate_briefing / format_briefing / run_briefing
+│
 ├── tasks/                       # 定时任务
-│   ├── daily_tasks.py           # 每日：下载价格、更新标的、提取企业行为
+│   ├── daily_tasks.py           # 每日：下载价格、计算因子、生成简报、更新标的
 │   ├── backtest_tasks.py        # 回测任务：run_backtest() ⭐ 新增
 │   ├── seasonal_tasks.py        # 季度：基本面数据
 │   └── annual_tasks.py          # 年度：深度清洗
@@ -627,9 +635,10 @@ CREATE TABLE data_update_logs (
 
 ```python
 def daily_update():
-    1. download_prices()              # 下载最新价格
-    2. extract_corporate_actions()    # 提取分红、拆股
+    1. download_prices()              # 下载最新价格（Tiingo EOD）
+    2. compute_all_factors()          # 计算全部 9 个技术因子
     3. update_tradable_universe()     # 更新可交易标的池
+    4. run_briefing()                 # 生成每日市场情报简报（写入日志）
 ```
 
 ### 3. 因子计算流程
@@ -737,11 +746,11 @@ compare_portfolio_with_tickers(
 
 #### 6.1 动量因子（Momentum）
 - **文件**：`factors/momentum.py`
-- **因子名称**：`mom_{lookback}d_skip{skip}`
+- **因子名称**：`mom_{lookback}d` / `mom_{lookback}d_skip{skip}`
 - **计算公式**：`(price_t-skip / price_t-skip-lookback) - 1`
-- **默认参数**：`lookback=252`, `skip=21`
+- **已计算规格**：`mom_1d`（单日）, `mom_5d`（周）, `mom_21d`（月）, `mom_63d`（季）, `mom_126d`（半年）, `mom_252d_skip21`（年动量）
 - **理论依据**：动量效应（Jegadeesh & Titman, 1993）
-- **适用场景**：捕捉中期趋势，跳过近期反转
+- **适用场景**：中期趋势捕捉；`mom_1d`/`mom_5d` 用于每日简报的涨跌榜
 
 #### 6.2 波动率因子（Volatility）
 - **文件**：`factors/volatility.py`
@@ -1032,14 +1041,16 @@ python main.py
 - [x] 添加更多因子（波动率、成交量、反转、跳空风险、最大回撤）✅
 - [x] 回测引擎（BacktestRunner + Portfolio + ScoringStrategy）✅
 - [x] 可视化面板（NAV 对比图 - portfolio vs tickers）✅
+- [x] 新增情报因子：`mom_1d`、`vol_ratio_20d`（量比）、`decline_streak`（连续下跌）✅
+- [x] 每日市场情报简报：涨跌榜 / 量突变 / 连跌预警 / 波动预警 / 板块汇总 ✅
+- [ ] **Tiingo News API**：接入新闻情绪因子（POWER 计划已含）
 - [ ] **因子合成**：多因子线性加权以外的方法（IC 加权、机器学习）
 - [ ] **因子有效性分析**：IC 时序、分组回测（quintile）、因子相关性矩阵
 - [ ] **多空策略**：支持做空，净值曲线分开统计 Long / Short / L/S
 - [ ] **风险管理模块**：VaR、最大回撤硬限制、波动率目标仓位
 - [ ] **实盘交易接口**：Interactive Brokers IBKR API 对接
 - [ ] **基本面因子**：接入 fundamental_daily 表（PE/PB/市值加权）
-- [ ] **调仓频率优化**：周频 / 双周频调仓支持
-- [ ] **交易成本建模优化**：市场冲击成本、流动性约束
+- [ ] **简报 HTML 输出**：将每日简报导出为 HTML 文件，支持浏览器查看
 
 ---
 
@@ -1052,4 +1063,4 @@ python main.py
 
 ---
 
-**最后更新**：2026-03-26
+**最后更新**：2026-07-24

@@ -18,6 +18,8 @@ from engine.compute_factors import (
     compute_momentum,
     compute_volatility,
     compute_volatility_of_volatility,
+    compute_volume_ratio,
+    compute_decline_streak,
 )
 
 
@@ -28,3 +30,5 @@ def compute_all_factors():
     compute_volatility_of_volatility.run()
     compute_jump_risk.run()
     compute_max_drawdown.run()
+    compute_volume_ratio.run()
+    compute_decline_streak.run()

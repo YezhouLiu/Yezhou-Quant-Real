@@ -1,6 +1,7 @@
 # Implementation Plan: 因子计算引擎
 
 **Branch**: `003-factor-computation` | **Date**: 2026-04-21 | **Status**: ✅ Implemented  
+**Last Updated**: 2026-07-24（新增 3 个因子 + compute runner）  
 **Spec**: [spec.md](spec.md)
 
 ---
@@ -31,11 +32,13 @@
 ```text
 factors/
 ├── volatility.py              # 年化波动率因子
-├── momentum.py                # 价格动量因子
+├── momentum.py                # 价格动量因子（含 mom_1d）
 ├── dollar_volume.py           # 对数美元成交量因子
 ├── max_drawdown.py            # 最大回撤因子
 ├── volatility_of_volatility.py # 波动率之波动率
-└── jump_risk.py               # 跳跃风险
+├── jump_risk.py               # 跳跃风险
+├── volume_ratio.py            # ✅ 量比因子（vol_ratio_20d）2026-07-24
+└── decline_streak.py          # ✅ 连续下跌计数因子（decline_streak）2026-07-24
 
 engine/
 ├── signals.py                 # 因子加载 → 宽表 → 归一化管道
@@ -47,7 +50,9 @@ engine/
     ├── compute_dollar_volume.py
     ├── compute_max_drawdown.py
     ├── compute_vol_of_vol.py
-    └── compute_jump_risk.py
+    ├── compute_jump_risk.py
+    ├── compute_volume_ratio.py  # ✅ 新增 2026-07-24
+    └── compute_decline_streak.py # ✅ 新增 2026-07-24
 ```
 
 ---
@@ -127,12 +132,14 @@ def build_signals_for_date(conn, asof_date, specs, factor_version, universe_ids)
 
 | 因子 | 模板 | 示例 |
 |------|------|------|
-| 动量 | `mom_{lookback}d_skip{skip}` | `mom_63d_skip21` |
+| 动量（含单日） | `mom_{lookback}d` / `mom_{lookback}d_skip{skip}` | `mom_1d`, `mom_5d`, `mom_63d_skip21` |
 | 波动率 | `vol_{window}d_ann{annualize}` | `vol_60d_ann252` |
 | 美元成交量 | `dv_{window}d_log` | `dv_20d_log` |
 | 最大回撤 | `mdd_{window}d` | `mdd_252d` |
 | 波动率之波动 | `vol_of_vol_{window}d` | `vol_of_vol_60d` |
 | 跳跃风险 | `jump_risk_{window}d` | `jump_risk_252d` |
+| 量比 ✅ | `vol_ratio_{window}d` | `vol_ratio_20d` |
+| 连续下跌 ✅ | `decline_streak` | `decline_streak` |
 
 ---
 

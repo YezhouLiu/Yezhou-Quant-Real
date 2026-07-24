@@ -121,10 +121,12 @@ def add_instrument_and_download(
 # ============================================================
 if __name__ == "__main__":
     add_instrument_and_download(
-        ticker="IBIT",
-        start_date=date(2024, 1, 11),
-        exchange="NASDAQ",
-        asset_type="ETF",
-        company_name="iShares Bitcoin Trust ETF",
+        ticker="SPCX",
+        start_date=date(2026, 6, 13),   # 明天上市日
+        exchange="NASDAQ",      # 或 NYSE，明天确认
+        asset_type="Stock",
+        company_name="Space Exploration Technologies Corp",
+        sector="Industrials",
+        industry="Aerospace & Defense",
         is_tradable=True,
     )

@@ -33,7 +33,7 @@ from typing import Optional, Dict, Tuple
 import requests
 from urllib3.util.retry import Retry
 from typing import Optional, Dict, List, Any, Tuple
-from database.readwrite.rw_instruments import get_all_instruments
+from database.readwrite.rw_instruments import get_all_instruments, get_instrument_by_ticker
 from database.readwrite.rw_market_prices import batch_insert_prices, get_price_max_date
 from database.readwrite.rw_system_state import get_state, set_state
 from database.utils.db_utils import get_db_connection
@@ -408,3 +408,45 @@ def transform_tiingo_price_data_to_db_format(
         )
 
     return db_records
+
+
+def download_single_instrument_prices(
+    ticker: str,
+    start_date: date,
+    end_date: date,
+) -> int:
+    """
+    下载单只股票指定日期范围的价格并写入数据库，返回插入的记录数。
+    不做任何状态管理，调用方自己决定日期范围。
+    """
+    api_token = get_config_value("tiingo.api_key")
+    conn = get_db_connection()
+    try:
+        instrument = get_instrument_by_ticker(conn, ticker)
+        if instrument is None:
+            raise ValueError(f"instruments 表中找不到 ticker={ticker}")
+        instrument_id = instrument["instrument_id"]
+
+        session = _build_session()
+        try:
+            tiingo_data = fetch_tiingo_prices(ticker, start_date, end_date, api_token, session)
+        finally:
+            session.close()
+
+        if tiingo_data is None:
+            raise RuntimeError(f"{ticker}: Tiingo 请求失败")
+        if len(tiingo_data) == 0:
+            log.info(f"⏭️  {ticker}: 该日期范围内无数据")
+            return 0
+
+        db_records = transform_tiingo_price_data_to_db_format(tiingo_data, instrument_id)
+        batch_insert_prices(conn, db_records)
+        conn.commit()
+        log.info(f"✅ {ticker} (id={instrument_id}): 插入 {len(db_records)} 条记录")
+        return len(db_records)
+    except Exception as e:
+        conn.rollback()
+        log.error(f"❌ {ticker}: {e}")
+        raise
+    finally:
+        conn.close()
