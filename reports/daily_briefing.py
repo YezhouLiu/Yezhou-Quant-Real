@@ -27,8 +27,11 @@ from typing import Optional
 
 import pandas as pd
 
+import os
+
 from database.utils.db_utils import get_db_connection
 from database.readwrite.rw_factor_values import get_factor_values
+from utils.config_loader import get_config_value
 from utils.logger import get_logger
 
 log = get_logger("daily_briefing")
@@ -496,7 +499,16 @@ def run_briefing(date: Optional[str] = None, top_n: int = 20) -> str:
     try:
         data = generate_briefing(conn=conn, date=date, top_n=top_n)
         text = format_briefing(data)
-        log.info("\n" + text)
+
+        briefing_date = data.get("date") or "unknown"
+        log_dir = get_config_value("log.log_dir", "logs")
+        out_dir = os.path.join(log_dir, "briefings")
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, f"{briefing_date}.log")
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        log.info(f"[briefing] written to {out_path}")
+
         return text
     finally:
         conn.close()
