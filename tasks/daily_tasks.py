@@ -14,7 +14,6 @@
 from data_download.input.price_downloader import download_prices
 from data_download.update.update_tradable_universe import update_tradable_universe
 from engine.compute_factors.compute_all_factors import compute_all_factors
-from reports.daily_briefing import run_briefing
 
 
 def daily_update():
@@ -25,7 +24,4 @@ def daily_update():
 
     # 每日更新可交易标的
     update_tradable_universe()
-
-    # 生成每日市场情报简报（打印到日志）
-    run_briefing()
     

@@ -24,6 +24,7 @@ if __name__ == "__main__":
     #seasonal_update()
     #daily_update()
     
+    # 生成每日市场情报简报（打印到日志）
     run_briefing()
 
     # run_backtest()

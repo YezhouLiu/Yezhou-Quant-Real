@@ -54,6 +54,19 @@ _VOL_SPIKE_MIN_RATIO = 2.0     # vol_ratio >= 2x to appear in spikes section
 _DECLINE_STREAK_MIN_DAYS = 3   # >= 3 consecutive down days
 _VOL_ALERT_MIN = 0.50          # annualised vol >= 50%
 
+# Sectors to auto-include in the AI / Tech focus section
+_AI_TECH_SECTORS = {
+    "Technology",
+    "Communication Services",
+}
+
+# Extra tickers to always include regardless of sector
+# (add cross-sector AI/tech-adjacent names here)
+_AI_TECH_WATCHLIST = {
+    "AAPL",   # Consumer Cyclical but deeply tech
+    "CAT",    # Industrials but major data-centre power play
+}
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -343,7 +356,28 @@ def generate_briefing(
             sections.append({"name": "volatility_alerts", "label": f"VOLATILITY ALERTS (20d Ann Vol >= {_VOL_ALERT_MIN*100:.0f}%)", "rows": rows})
 
         # ------------------------------------------------------------------
-        # 6. SECTOR SUMMARY — average 5d return by sector
+        # 6. AI / TECH FOCUS — all stocks whose sector matches keywords
+        # ------------------------------------------------------------------
+        if "sector" in wide.columns and "mom_5d" in wide.columns:
+            sector_mask = wide["sector"].isin(_AI_TECH_SECTORS)
+            watchlist_mask = wide["ticker"].isin(_AI_TECH_WATCHLIST)
+            ai_sub = wide[sector_mask | watchlist_mask].dropna(subset=["mom_5d"]).sort_values("mom_5d", ascending=False)
+            rows = [
+                {
+                    "ticker": r.ticker,
+                    "company_name": r.company_name,
+                    "sector": r.sector,
+                    "mom_1d": getattr(r, "mom_1d", float("nan")),
+                    "mom_5d": r.mom_5d,
+                    "mom_21d": getattr(r, "mom_21d", float("nan")),
+                    "vol_ratio_20d": getattr(r, "vol_ratio_20d", float("nan")),
+                }
+                for r in ai_sub.itertuples(index=False)
+            ]
+            sections.append({"name": "ai_tech_focus", "label": "AI / TECH FOCUS (Sorted by 5d Return)", "rows": rows})
+
+        # ------------------------------------------------------------------
+        # 7. SECTOR SUMMARY — average 5d return by sector
         # ------------------------------------------------------------------
         if "mom_5d" in wide.columns and "sector" in wide.columns:
             sector_df = (
@@ -412,6 +446,7 @@ def format_briefing(data: dict) -> str:
         "volume_spikes":     "VOLUME SPIKES",
         "decline_streaks":   "DECLINE STREAKS",
         "volatility_alerts": "VOLATILITY ALERTS",
+        "ai_tech_focus":     "AI / TECH FOCUS",
         "sector_summary":    "SECTOR SUMMARY",
     }
 
@@ -469,6 +504,18 @@ def format_briefing(data: dict) -> str:
                     f"  {(r['sector'] or '')[:16]:<16}"
                     f"  {_fmt_pct(r['vol_20d_ann252']):>7}"
                     f"  {_fmt_pct(r['mom_5d']):>7}"
+                )
+
+        elif name == "ai_tech_focus":
+            lines.append(f"  {'#':>3}  {'Ticker':<8}  {'Company':<24}  {'Sector':<20}  {'1d':>7}  {'5d':>7}  {'1m':>7}  {'VolRatio':>8}")
+            for i, r in enumerate(rows, 1):
+                lines.append(
+                    f"  {i:>3}.  {r['ticker']:<8}  {(r['company_name'] or '')[:24]:<24}"
+                    f"  {(r['sector'] or '')[:20]:<20}"
+                    f"  {_fmt_pct(r['mom_1d']):>7}"
+                    f"  {_fmt_pct(r['mom_5d']):>7}"
+                    f"  {_fmt_pct(r['mom_21d']):>7}"
+                    f"  {_fmt_ratio(r['vol_ratio_20d']):>8}"
                 )
 
         elif name == "sector_summary":
